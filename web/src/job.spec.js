@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cancelJob, createJob, getJob, subscribeJobEvents, isTerminal } from './api.js'
+import { cancelJob, createJob, getJob, saveDevices, subscribeJobEvents, isTerminal } from './api.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -42,6 +42,33 @@ describe('任务 API', () => {
     await cancelJob('/api', 'j1')
     expect(spy.mock.calls[0][0]).toContain('/api/jobs/j1')
     expect(spy.mock.calls[0][1].method).toBe('DELETE')
+  })
+
+  it('saveDevices PUT 设备配置', async () => {
+    const spy = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, devices: 3 }) }),
+    )
+    vi.stubGlobal('fetch', spy)
+    const cfg = { devices: [] }
+    await saveDevices('/api', 'j9', cfg)
+    const [url, init] = spy.mock.calls[0]
+    expect(url).toBe('/api/jobs/j9/out/devices.json')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual(cfg)
+  })
+
+  it('saveDevices 校验失败时透出服务端文案', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve({
+          ok: false,
+          status: 400,
+          json: () => Promise.resolve({ error: { code: 'E4002', message: 'deviceId 重复：pcs-01' } }),
+        }),
+      ),
+    )
+    await expect(saveDevices('/api', 'j9', { devices: [] })).rejects.toThrow('deviceId 重复')
   })
 })
 

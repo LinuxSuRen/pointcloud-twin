@@ -99,6 +99,15 @@ export function cancelJob(apiBase, id) {
   return jobRequest(`${apiBase}/jobs/${encodeURIComponent(id)}`, 'DELETE')
 }
 
+// saveDevices 把查看器内编辑后的设备代理体配置写回任务产物。
+export function saveDevices(apiBase, jobId, config) {
+  return jobRequest(
+    `${apiBase}/jobs/${encodeURIComponent(jobId)}/out/devices.json`,
+    'PUT',
+    config,
+  )
+}
+
 /**
  * subscribeJobEvents 订阅任务 SSE 进度流（一次性任务语义）：
  * 收到终态即 close + onEnd；出错即 close + onError（调用方转 REST 轮询兜底）。

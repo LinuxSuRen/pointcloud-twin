@@ -87,6 +87,13 @@ pc2twin pcd2las --input site.pcd --output site.las
 - **单文件 GLB**：`pc2twin export` CLI 与 `GET /api/jobs/{id}/export/glb` 现场生成——根节点携带 z-up→y-up 矩阵（本地 ENU 坐标、米制），子节点为点云（POINTS 图元 + 顶点色）与每台设备的盒体网格（TRS 对应 center/heading/size，材质按 deviceType 着色）；可导入 UE/Unity/Blender/three.js 等通用引擎。serve 导出设 800 万点上限（体积保护，超限提示导入时降采样）。
 - **前端下载**：查看器在场景来自导入任务时显示导出按钮，使用原生导航下载（attachment 响应不离开页面，避免 fetch→blob 整文件驻留内存）。
 
+### 2.7 设备图形化标注（对应需求 S2）
+
+- **两点画盒**：查看器「标注设备」模式，点击点云表面两角点（`scene.pickPosition` 拾取 + ENU 逆变换回局部坐标）生成代理体；底面取 XY 外接矩形、盒底取较低 Z、默认高 3 米（最小边长 0.5 米防误点），几何逻辑独立于 Cesium 便于单测。
+- **表单编辑**：选中设备后在面板编辑 deviceId/deviceType/center/size/heading，change 即应用（实体按设备整体重建，含面板纹理）；ID 冲突与非法尺寸在前端拦截并提示。
+- **保存回写**：`PUT /api/jobs/{id}/out/devices.json` 校验（proxy.Validate）后写回任务产物，origin 缺省保留原值；非任务场景（如 mock 演示）不支持保存并有明确提示。
+- 保存后的 devices.json 随 zip/GLB 导出进入交付物，形成「导入 → 转换 → 标注 → 导出」闭环。
+
 ## 3. 前端示例查看器（Vue 3）
 
 - **技术栈**：Vue 3 + Vite + CesiumJS；构建产物为静态站点，可直接对接任意静态托管。

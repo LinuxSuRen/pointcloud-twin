@@ -13,6 +13,14 @@ export const store = reactive({
   tilesError: '',
   devicesError: '',
   selectedId: null,
+  /** 当前场景来源任务的 ID（可保存标注）；非任务场景为 null */
+  jobId: null,
+  /** 标注模式：在点云上两点画盒 */
+  annotateMode: false,
+  /** 标注步骤提示 */
+  annotateHint: '',
+  /** 保存标注的结果提示 */
+  saveMessage: '',
 })
 
 // applyStatusFrame 应用一帧 deviceId → 指标 数据（增量合并）。

@@ -84,6 +84,10 @@ pc2twin export --input site.pcd --devices devices.json --output twin.glb --voxel
 
 GLB 坐标为本地 ENU（米），根节点携带 z-up→y-up 变换；大点云建议 `--voxel` 降采样控制体积（serve 导出上限 800 万点）。
 
+### 6. 图形化标注设备（查看器内编辑 devices.json）
+
+查看器右上角「**标注设备**」进入标注模式：在点云上**点击两个角点**即画出设备代理体（默认高 3 米，可后调），随后在右侧面板**编辑设备 ID / 类型 / 中心 / 尺寸 / 朝向**（实时预览、可删除），点「**保存标注**」写回 `devices.json`（仅导入任务场景可用）。编辑保存后再导出 zip / GLB，设备语义随之进入交付物。
+
 ## 仓库结构
 
 ```text

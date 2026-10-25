@@ -88,6 +88,9 @@ pc2twin serve --addr 127.0.0.1:8080 --data ./pc2twin-data
 | `DELETE /api/jobs/{id}` | 取消任务（cancelled 与 failed 区分） |
 | `GET /api/jobs/{id}/events` | SSE 进度流（`X-Accel-Buffering: no`、变化才推、终态即关） |
 | `GET /api/jobs/{id}/out/*` | 托管转换产物（tileset.json / tiles / devices.json / report.json） |
+| `GET /api/jobs/{id}/export` | 导出 zip（3D Tiles 目录 + 配置 + 报告） |
+| `GET /api/jobs/{id}/export/glb` | 导出单文件 GLB（点云 + 设备盒体，800 万点上限） |
+| `PUT /api/jobs/{id}/out/devices.json` | 查看器内标注/编辑后的设备配置写回（校验失败 400；origin 缺省时保留任务产物原值） |
 
 **任务状态机**：`running → succeeded | failed | cancelled`；同一时刻仅允许 1 个转换任务（CPU/内存密集，串行更稳）；任务记录保留 10 分钟、产物目录保留 24 小时后自动清理；上传会话 2 小时未活动过期。
 

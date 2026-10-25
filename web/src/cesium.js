@@ -36,46 +36,57 @@ export async function loadTileset(viewer, url) {
   return tileset
 }
 
+// enuFrame 返回某 ENU 原点的正逆变换（局部 ENU ↔ ECEF）。
+export function enuFrame(origin) {
+  const o = origin ?? { lon: 0, lat: 0, h: 0 }
+  const originCartesian = Cesium.Cartesian3.fromDegrees(o.lon, o.lat, o.h || 0)
+  const matrix = Cesium.Transforms.eastNorthUpToFixedFrame(originCartesian)
+  const inverse = Cesium.Matrix4.inverse(matrix, new Cesium.Matrix4())
+  return { matrix, inverse }
+}
+
 // addDeviceEntities 依据代理体配置生成设备实体：盒面贴动态数据面板
 // （Canvas 纹理），描边随状态变色。返回 deviceId → {entity, panel} 映射。
 export function addDeviceEntities(viewer, devices, origin) {
-  const originCarto = origin ?? { lon: 0, lat: 0, h: 0 }
-  const originCartesian = Cesium.Cartesian3.fromDegrees(originCarto.lon, originCarto.lat, originCarto.h || 0)
-  const enu = Cesium.Transforms.eastNorthUpToFixedFrame(originCartesian)
+  const frame = enuFrame(origin)
   const byId = new Map()
-
   for (const d of devices) {
-    const center = Cesium.Matrix4.multiplyByPoint(
-      enu,
-      new Cesium.Cartesian3(d.center[0], d.center[1], d.center[2]),
-      new Cesium.Cartesian3(),
-    )
-    const hpr = new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(d.heading || 0), 0, 0)
-    const orientation = Cesium.Transforms.headingPitchRollQuaternion(center, hpr)
-    const panel = createPanel(d)
-    const entity = viewer.entities.add({
-      id: d.deviceId,
-      position: center,
-      orientation,
-      box: {
-        dimensions: new Cesium.Cartesian3(d.size[0], d.size[1], d.size[2]),
-        material: new Cesium.ImageMaterialProperty({ image: panel.canvas, transparent: false }),
-        outline: true,
-        outlineColor: Cesium.Color.fromCssColorString('#3d9ff0'),
-      },
-      label: {
-        text: d.deviceId,
-        font: '12px sans-serif',
-        fillColor: Cesium.Color.fromCssColorString('#c8d2de'),
-        showBackground: true,
-        backgroundColor: Cesium.Color.fromCssColorString('#171e27').withAlpha(0.85),
-        pixelOffset: new Cesium.Cartesian2(0, -14),
-        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 400),
-      },
-    })
-    byId.set(d.deviceId, { entity, panel })
+    byId.set(d.deviceId, addOneDevice(viewer, d, frame))
   }
   return byId
+}
+
+// addOneDevice 生成单台设备的实体（新建与编辑后重建共用）。
+export function addOneDevice(viewer, device, frame) {
+  const center = Cesium.Matrix4.multiplyByPoint(
+    frame.matrix,
+    new Cesium.Cartesian3(device.center[0], device.center[1], device.center[2]),
+    new Cesium.Cartesian3(),
+  )
+  const hpr = new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(device.heading || 0), 0, 0)
+  const orientation = Cesium.Transforms.headingPitchRollQuaternion(center, hpr)
+  const panel = createPanel(device)
+  const entity = viewer.entities.add({
+    id: device.deviceId,
+    position: center,
+    orientation,
+    box: {
+      dimensions: new Cesium.Cartesian3(device.size[0], device.size[1], device.size[2]),
+      material: new Cesium.ImageMaterialProperty({ image: panel.canvas, transparent: false }),
+      outline: true,
+      outlineColor: Cesium.Color.fromCssColorString('#3d9ff0'),
+    },
+    label: {
+      text: device.deviceId,
+      font: '12px sans-serif',
+      fillColor: Cesium.Color.fromCssColorString('#c8d2de'),
+      showBackground: true,
+      backgroundColor: Cesium.Color.fromCssColorString('#171e27').withAlpha(0.85),
+      pixelOffset: new Cesium.Cartesian2(0, -14),
+      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 400),
+    },
+  })
+  return { entity, panel }
 }
 
 // setupPicking 注册点选：命中代理体时回调 deviceId。
@@ -85,13 +96,45 @@ export function setupPicking(viewer, onPick) {
     const picks = viewer.scene.drillPick(click.position)
     for (const p of picks) {
       if (p?.id && typeof p.id === 'string' && onPick) {
-        onPick(p.id)
+        onPick(p.id, click.position)
         return
       }
     }
-    onPick(null)
+    onPick(null, click.position)
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
   return handler
+}
+
+// pickLocalPoint 在窗口坐标处拾取点云/地形表面点，返回局部 ENU 坐标（米）。
+// 拾取失败（点到天空等）返回 null。
+export function pickLocalPoint(viewer, windowPos, frame) {
+  if (!viewer.scene.pickPositionSupported) {
+    return null
+  }
+  const cartesian = viewer.scene.pickPosition(windowPos)
+  if (!cartesian) {
+    return null
+  }
+  const local = Cesium.Matrix4.multiplyByPoint(frame.inverse, cartesian, new Cesium.Cartesian3())
+  return [local.x, local.y, local.z]
+}
+
+// addMarkerPoint 画一个临时标记点（标注角点提示用）。
+export function addMarkerPoint(viewer, cartesian, colorCss = '#ffbd2e') {
+  return viewer.entities.add({
+    position: cartesian,
+    point: {
+      pixelSize: 10,
+      color: Cesium.Color.fromCssColorString(colorCss),
+      outlineColor: Cesium.Color.fromCssColorString('#10151c'),
+      outlineWidth: 2,
+    },
+  })
+}
+
+// localToCartesian 把局部 ENU 坐标转回世界坐标。
+export function localToCartesian(frame, x, y, z) {
+  return Cesium.Matrix4.multiplyByPoint(frame.matrix, new Cesium.Cartesian3(x, y, z), new Cesium.Cartesian3())
 }
 
 // flyToDevice 相机飞向设备代理体。
