@@ -70,6 +70,17 @@ pc2twin pcd2las --input site.pcd --output site.las
 
 输出目录中的 `report.json` 记录输入点数、降采样结果、剔除点数、包围盒、CRS（类型 + ENU 原点 + 是否显式）、瓦片统计与关键参数——作为 R2 验收依据与「坐标系配错难察觉」风险的叠加校验手段。
 
+### 2.5 服务化封装（`pc2twin serve`，对应需求 S3 首版）
+
+同一个二进制通过 `serve` 子命令提供 Web 服务，支撑查看器「导入 PCD」入口：
+
+- **分片续传上传**：init 稀疏预分配 + 分片 `WriteAt` 直写（峰值磁盘 1×，无拼接步骤）；`LimitReader(expected+1)` 边界校验防请求粘连；乱序/断点按 `receivedChunks` 对账，幂等重传；complete 可选 SHA-256 流式校验；会话 2 小时未活动过期清理。
+- **异步任务**：`POST /api/jobs` → 202 + jobId；类型级并发上限 1（超限 409「已有转换任务在运行」）；`recover` 隔离 panic；cancelled 与 failed 严格区分（ctx 在阶段边界生效）；任务记录 10 分钟、产物目录 24 小时过期清理。
+- **SSE 进度流**：三件套响应头（含 `X-Accel-Buffering: no`）、连接即推快照、500ms 轮询变化才写帧、终态即关；`GET /api/jobs/{id}` 为同源 REST 兜底。
+- **进度钩子**：pipeline 暴露阶段权重回调（读取 30 / 降采样 10 / LAS 15 / 切片 45），切片阶段按瓦片粒度上报。
+- **产物托管**：`GET /api/jobs/{id}/out/*` 直接供查看器加载；前端完成后销毁旧底图与实体并切换场景。
+- **前端引擎**：并发窗口 3（夹紧 1~6）+ 单片重试 3 次（重试前先查 status 对账）；会话 404 自动重新 initiate 并经回调持久化（刷新页面可续传）；大文件流式 SHA-256（自实现增量实现，内存恒定）；进度以服务端 received_chunks 口径回调。
+
 ## 3. 前端示例查看器（Vue 3）
 
 - **技术栈**：Vue 3 + Vite + CesiumJS；构建产物为静态站点，可直接对接任意静态托管。
@@ -130,4 +141,4 @@ pointcloud-twin/
 
 ## 6. 与需求的对齐
 
-本方案覆盖 [requirements.md](requirements.md) 的 R1–R5：R1 由 `internal/pcd` + `internal/tiler` 落地（3D Tiles 1.1 默认、1.0 可选、降采样可选）；R2 由 `internal/crs`/`internal/geo` + LAS 双 VLR + tileset 根变换 + 转换报告落地；R3 由 `internal/proxy` 与 `--devices` 流程落地；R4 由 cobra CLI + slog + `apperr` 错误码落地（文档见 [cli.md](cli.md)）；R5 由 `web/` 查看器与 mock 数据源落地。S1 部分落地（体素降采样）；S2（图形化标注）、S3（REST 异步任务化）、S4（批量多站点）不在首版范围。
+本方案覆盖 [requirements.md](requirements.md) 的 R1–R5：R1 由 `internal/pcd` + `internal/tiler` 落地（3D Tiles 1.1 默认、1.0 可选、降采样可选）；R2 由 `internal/crs`/`internal/geo` + LAS 双 VLR + tileset 根变换 + 转换报告落地；R3 由 `internal/proxy` 与 `--devices` 流程落地；R4 由 cobra CLI + slog + `apperr` 错误码落地（文档见 [cli.md](cli.md)）；R5 由 `web/` 查看器与 mock 数据源落地。S1 部分落地（体素降采样）；S3 已落地首版（`pc2twin serve`：分片上传 + 异步任务 + SSE 进度 + 产物托管，见 2.5 节）；S2（图形化标注）、S4（批量多站点）不在首版范围。

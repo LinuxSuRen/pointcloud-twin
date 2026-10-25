@@ -62,11 +62,19 @@ pnpm dev       # 打开 http://localhost:5173
 
 查看器（Vue 3 + Vite + CesiumJS）会加载点云底图、渲染 6 台设备的半透明代理体，并用模拟数据实时驱动代理体颜色与状态标签：温度过高转红、低电量转黄、正常为绿；点击代理体或侧栏设备可查看详情。
 
+### 4. 网页内导入自己的 PCD（可选）
+
+```bash
+pc2twin serve --addr 127.0.0.1:8080 --data ./pc2twin-data
+```
+
+启动转换服务后，查看器右上角会出现「导入 PCD」入口：选择 PCD 文件（可附带 devices.json 与转换参数）→ 分片上传（断点续传、SHA-256 校验）→ SSE 实时进度 → 完成后场景自动切换到新点云。API 细节见 [docs/cli.md](docs/cli.md) 的 `serve` 一节。
+
 ## 仓库结构
 
 ```text
 pointcloud-twin/
-├── cmd/pc2twin/        # Go CLI 入口（convert / pcd2las / version）
+├── cmd/pc2twin/        # Go CLI 入口（convert / pcd2las / serve / version）
 ├── internal/
 │   ├── pcd/            # PCD 读取（ascii / binary / binary_compressed）
 │   ├── las/            # LAS 1.4 写入（PDR7 + WKT CRS + ENU 原点 VLR）
@@ -75,7 +83,8 @@ pointcloud-twin/
 │   ├── proxy/          # 设备代理体配置读写与校验
 │   ├── crs/            # ENU 原点定义与解析
 │   ├── geo/            # WGS84 坐标换算（闭式公式，无 PROJ 依赖）
-│   ├── pipeline/       # 流水线编排与转换报告
+│   ├── pipeline/       # 流水线编排、进度回调与转换报告
+│   ├── server/         # serve 子命令：分片上传 / 异步任务 / SSE 进度
 │   ├── apperr/         # 稳定错误码
 │   ├── logx/           # slog 日志
 │   └── pcdfix/         # PCD 测试夹具生成

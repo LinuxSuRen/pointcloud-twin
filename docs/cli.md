@@ -58,6 +58,51 @@ pc2twin pcd2las --input site.pcd --output site.las --crs-enu "121.47,31.23,10"
 | `--voxel` | 同 convert |
 | `--log-level` | 同 convert |
 
+### `pc2twin serve`
+
+启动 Web 服务：网页内导入 PCD（分片续传上传）、异步转换（SSE 进度流）、托管转换产物供查看器直接加载。
+
+```bash
+pc2twin serve --addr 127.0.0.1:8080 --data ./pc2twin-data
+```
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--addr, -a` | 127.0.0.1:8080 | 监听地址 |
+| `--data` | pc2twin-data | 数据目录（上传暂存 + 任务产物） |
+| `--chunk-size` | 16 | 分片上传单片大小（MB） |
+| `--max-upload` | 2048 | 单文件上传上限（MB） |
+| `--log-level` | info | 日志级别 |
+
+**任务 API**：
+
+| 接口 | 说明 |
+|---|---|
+| `POST /api/uploads/init` | `{filename, size, purpose: "pcd"\|"devices"}` → `202 {uploadId, chunkSize}` |
+| `PUT /api/uploads/{id}/chunks/{index}` | raw body 直写单片（末片按剩余字节计），幂等可重传 |
+| `GET /api/uploads/{id}` | 查询分片对账（`receivedChunks`），断点续传依据 |
+| `POST /api/uploads/{id}/complete` | `{sha256}` 可选完整性校验，定稿 |
+| `DELETE /api/uploads/{id}` | 放弃上传并清理暂存 |
+| `POST /api/jobs` | `{pcdUploadId, devicesUploadId?, options{crsEnu, voxel, pointsPerTile, refine, tilesVersion}}` → `202 {jobId}`；已有任务在运行时返回 `409` |
+| `GET /api/jobs/{id}` | 任务状态兜底查询（与 SSE 同源同结构） |
+| `DELETE /api/jobs/{id}` | 取消任务（cancelled 与 failed 区分） |
+| `GET /api/jobs/{id}/events` | SSE 进度流（`X-Accel-Buffering: no`、变化才推、终态即关） |
+| `GET /api/jobs/{id}/out/*` | 托管转换产物（tileset.json / tiles / devices.json / report.json） |
+
+**任务状态机**：`running → succeeded | failed | cancelled`；同一时刻仅允许 1 个转换任务（CPU/内存密集，串行更稳）；任务记录保留 10 分钟、产物目录保留 24 小时后自动清理；上传会话 2 小时未活动过期。
+
+**服务侧错误码**（在转换错误码之外新增）：
+
+| 错误码 | 含义 |
+|---|---|
+| E7001 | 请求参数无效 |
+| E7002 | 暂存文件读写失败 |
+| E7003 | 上传会话无效（不存在、未定稿、校验失败） |
+| E7004 | 任务不存在或已过期 |
+| E7005 | 当前连接不支持流式响应 |
+| E9001 | 任务内部错误（服务端已隔离，详见日志） |
+| E9002 | 转换失败（未归类错误） |
+
 ### `pc2twin version`
 
 显示版本信息。

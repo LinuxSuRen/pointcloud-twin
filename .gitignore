@@ -16,3 +16,6 @@ web/dist/
 *.las
 out/
 out-demo/
+
+# serve 服务数据目录（上传暂存与任务产物）
+pc2twin-data/
