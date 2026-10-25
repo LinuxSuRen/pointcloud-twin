@@ -1,6 +1,8 @@
 # 技术方案（Design）
 
-> 状态：v0.1 草案，等待评审。本文档描述 pointcloud-twin 怎么做，是需求的实现方案基线。
+> 状态：v0.2。v0.1 草案经评审后进入实现，本文档随实现更新：
+> 切片引擎由「嵌入 gocesiumtiler v3」调整为「自研纯 Go 生成器」（原因见 2.2 节决策记录），
+> License 相应由 AGPL-3.0 调整为 MIT，CLI 名称定为 `pc2twin`。
 
 ## 1. 总体架构：双图层
 
@@ -12,115 +14,120 @@
 
 **图层二：glTF 代理模型 + 实时数据（动态状态层）**
 
-针对需要展示状态的设备（电池舱、PCS 柜、变压器等），从点云中量取位置和包围盒尺寸，生成轻量的 glTF 代理几何体（半透明线框或简化立方体）。每个代理体赋予唯一的设备 ID，前端通过 WebSocket 接收 SCADA/BMS/PCS 的实时数据，根据设备 ID 将状态映射到代理体的颜色、透明度或悬浮标签上。
+针对需要展示状态的设备（电池舱、PCS 柜、变压器等），从点云量取位置和包围盒尺寸，生成轻量的代理几何体（前端以半透明盒体渲染）。每个代理体赋予唯一的设备 ID，前端通过 WebSocket 接收 SCADA/BMS/PCS 的实时数据，根据设备 ID 将状态映射到代理体的颜色、透明度或悬浮标签上。
 
 两者在 Cesium 场景中叠加渲染：点云提供真实感，代理模型提供可交互、可着色的状态语义。
 
 ## 2. Go 转换工具链
 
-核心职责是把 PCD 变成 Cesium 可加载的 3D Tiles。`gocesiumtiler` 是 Go 生态中较成熟的开源 3D Tiles 点云生成器，但不直接读 PCD（输入是 LAS/LAZ/E57），因此分两步，以 LAS 为桥接格式。
-
-### 2.1 步骤一：PCD → LAS
-
-**方案 A：纯 Go 实现（首版选型）**
-
-- 使用 Go 的 PCD 读取能力（候选库：`seqsense/pcgol` 的 PCD header 解析，`dereklison/pcd` 的 encoder/decoder）读取 XYZ 坐标（及可选 intensity/rgb）。
-- 使用 Go 的 LAS 写入库（候选：`softlandia/glasio` 或 `lidario`）写出标准 LAS 1.4 文件。
-- **保留坐标系信息**：现场扫描导出的 PCD 通常没有地理参考；工具允许显式指定局部坐标系（例如以站区某点为原点的 ENU），并把 CRS 写入 LAS 或在切片时通过 `--crs` 传入。
-
-选型理由：无外部运行时依赖、可控性最高、便于交叉编译发布单二进制。实现时若发现成熟库对 binary PCD 支持不足，自研解析器兜底（PCD 格式规范公开，binary 布局简单）。
-
-**方案 B：封装 PDAL（备选，降采样需求变重时启用）**
-
-- 通过 `os/exec` 封装 `pdal translate input.pcd output.las`，格式转换交给 PDAL。
-- 优点是省事且 pipeline 能力强（滤波、降采样）；缺点是引入外部依赖，违背单二进制分发目标，故仅作备选。
-
-### 2.2 步骤二：LAS → 3D Tiles（嵌入 gocesiumtiler 库）
-
-`gocesiumtiler` v3 提供 Library-First Go API，直接在代码中构造 tiler 实例（输入 LAS 路径、输出目录、CRS、每瓦片点数等），不走命令行。
-
-对储能站场景关键的参数：
-
-- **`--version 1.1`**：输出 3D Tiles 1.1（GLB/glTF 瓦片），兼容性好，便于与代理模型统一渲染栈。
-- **`--points-per-tile`**：站区级场景 5 万～10 万点/瓦片为合理起点。
-- **`--refine-mode add`**：ADD 模式避免跨 LOD 重复存储点，对网络带宽友好。
-- **压缩**：v3 默认启用 `EXT_meshopt_compression` 与 `KHR_mesh_quantization`，瓦片体积可压缩约 75%，对 Web 传输重要。
-
-> **许可证提醒**：`gocesiumtiler` v3 为 **AGPLv3**。本项目以库方式嵌入，故整体采用 **AGPL-3.0**；如未来需要闭源商业分发，需联系其作者获取商业许可。
-
-### 2.3 流水线
+核心职责是把 PCD 变成 Cesium 可加载的 3D Tiles。流水线：
 
 ```text
-PCD 输入 → （可选）预处理/降采样 → LAS 中间文件（含 CRS） → gocesiumtiler 库调用 → 3D Tiles 输出目录（tileset.json + 瓦片）
-                                      ↘ 设备代理体配置（JSON/YAML：deviceId、中心坐标、尺寸、朝向）
+PCD 输入 → （可选）体素降采样 → LAS 1.4 桥接文件（含 CRS）
+                                 ↘ 自研切片引擎 → 3D Tiles 输出目录（tileset.json + tiles/）
+                                 ↘ 设备代理体配置（devices.json：deviceId、中心、尺寸、朝向）
 ```
 
-Go 工具同时完成"几何底图"和"状态挂载点"的双重准备：
+### 2.1 步骤一：PCD 解析与 LAS 桥接
 
-- 3D Tiles 输出目录；
-- 设备代理体配置（首版人工标注/手写，见 R3）。
+- **PCD 解析自研**（`internal/pcd`）：覆盖 `ascii`、`binary`、`binary_compressed`（LZF 解压）三种编码；字段至少解析 x/y/z（float32/float64/整型），可选解析 `rgb/rgba`（打包或分离 r/g/b）与 `intensity`；NaN/Inf 点自动剔除。PCD 格式规范公开、二进制布局简单，自研解析器可控性最高。
+- **LAS 1.4 写入自研**（`internal/las`）：点记录格式 7（XYZ + 强度 + GPS 时间 + RGB），WKT2 工程 CRS 写入 VLR 2112（全局编码 bit4 置位），另写自定义 VLR 以 JSON 记录 ENU 原点供本工具链回读。LAS 是与 PCL、PDAL、gocesiumtiler 等生态互通的桥接格式。
+- **坐标系约定**（`internal/crs`、`internal/geo`）：源坐标一律按局部 ENU（东北天，米）解释；`--crs-enu "lon,lat,h"` 指定 WGS84 大地原点，缺省按 (0,0,0) 局部假设处理并如实标注。ENU→ECEF 用闭式公式实现，不依赖 PROJ。
 
-### 2.4 CLI 设计（草案）
+### 2.2 步骤二：点云 → 3D Tiles（自研纯 Go 生成器）
+
+**决策记录**：v0.1 草案原计划以库方式嵌入 gocesiumtiler v3。实现前调研发现其 v3 需要 **CGo + PROJ 9.8.1 静态库**，与本项目「单二进制、可交叉编译、无外部运行时依赖」的目标冲突（缺少 PROJ 构建环境时无法编译验证），经维护者确认改为自研，gocesiumtiler 降级为**可选外部工具路径**：本工具产出的 LAS 可直接交给 gocesiumtiler CLI 切片。License 相应从 AGPL-3.0 调整为 MIT。
+
+自研引擎（`internal/tiler`）要点：
+
+- **空间结构**：八叉树递归切分，直到单瓦片点数 ≤ `--points-per-tile`；
+- **refine=add**（默认）：内部节点承载等步长抽稀的粗层，子节点只承载剩余点——每个点恰好落在一个瓦片内容中，不跨 LOD 重复存储；**refine=replace**：子节点承载全量点，父瓦片替换式细化；
+- **3D Tiles 1.1**（默认）：瓦片为二进制 glTF（POINTS 图元，POSITION float32 + COLOR_0 uint8 normalized）。顶点保持 z-up 原值，glTF 根节点按规范写入 z-up→y-up 矩阵，由运行时的 y-up→z-up 旋转抵消；每瓦片坐标相对自身中心存储（float32 精度友好）；
+- **3D Tiles 1.0**（`--tiles-version 1.0`）：瓦片为传统 `.pnts`（POSITION + RGB，8 字节对齐），兼容旧查看器；
+- **地理放置**：tileset 根节点 `transform` = ENU→ECEF 变换（闭式公式）× 平移到点云包围盒中心，子瓦片 transform 相对父节点；
+- **几何误差**：叶节点为 0，内部节点取子树包围盒对角线。
+
+首版未做 meshopt 压缩与量化（gocesiumtiler v3 声称可再省约 75% 体积），列入后续版本。
+
+### 2.3 CLI（`pc2twin`）
+
+CLI 名称与仓库名解耦，定为 `pc2twin`（point cloud to twin）。子命令：
 
 ```bash
 # 完整转换
 pc2twin convert --input site.pcd --output ./out \
-  --crs-enu "origin=121.47,31.23,10" \
-  --voxel 0.05 --points-per-tile 80000 --refine add
+  --crs-enu "121.47,31.23,10" \
+  --voxel 0.05 --points-per-tile 80000 --refine add \
+  --tiles-version 1.1 --devices devices.json
 
 # 只做格式桥接
 pc2twin pcd2las --input site.pcd --output site.las
 ```
 
-约定：CLI 名与仓库名解耦，最终名称实现前敲定；参数与错误码在实现阶段冻结为文档。
+参数与错误码已冻结为文档：[cli.md](cli.md)。转换过程输出结构化分级日志（stdout，slog），关键链路出入口有 info 日志；用户可见错误为「稳定错误码 + 通俗提示」，技术根因只在 debug 日志。
+
+### 2.4 转换报告
+
+输出目录中的 `report.json` 记录输入点数、降采样结果、剔除点数、包围盒、CRS（类型 + ENU 原点 + 是否显式）、瓦片统计与关键参数——作为 R2 验收依据与「坐标系配错难察觉」风险的叠加校验手段。
 
 ## 3. 前端示例查看器（Vue 3）
 
-- **技术栈**：Vue 3 + Vite + CesiumJS（3D Tiles 支持最完整）；构建产物为静态站点，可直接对接任意静态托管。
-- **加载底图**：CesiumJS `Cesium3DTileset` 加载转换产出的 `tileset.json`。
-- **渲染代理体**：读取代理体配置，为每台设备生成半透明 glTF 盒体（Cesium Entity / Model），建立 `deviceId → 代理体对象` 映射表。
-- **状态数据通路**：后端（或示例中的模拟源）经 WebSocket 推送 `{deviceId, metrics: {soc, temp, power, alarmLevel}, ts}` 数据帧；前端查映射表更新材质颜色/透明度/悬浮标签。例如：SOC 低于阈值变橙色，温度异常闪烁红色，正常半透明绿色。
+- **技术栈**：Vue 3 + Vite + CesiumJS；构建产物为静态站点，可直接对接任意静态托管。
+- **加载底图**：`Cesium3DTileset.fromUrl` 加载 `tileset.json`（查看器不依赖 Cesium ion，离线可用）。
+- **渲染代理体**：读取 `devices.json`，按 `origin`（convert 注入的 ENU 原点）构造 ENU→ECEF 变换，为每台设备生成半透明盒体实体与标签，建立 `deviceId → 实体` 映射表；点击或侧栏选中可查看详情。
+- **状态数据通路**：WebSocket 接收数据帧，前端查映射表更新材质颜色与标签。告警等级转红、注意/低电量转黄、正常为绿；状态文案由前端映射表渲染，未知枚举走兜底文案。
 - **为什么不在点云上直接承载状态**：3D Tiles 1.1 的 `EXT_structural_metadata` 与 Batch Table 确实支持要素级元数据，但对设备粒度的状态展示，代理体方案在更新性能、交互响应与视觉清晰度上远优于百万级点云逐点着色。
 
-### WebSocket 消息契约（草案）
+### WebSocket 消息契约（已冻结）
 
 ```json
 {
   "type": "device-status",
   "ts": 1730000000000,
   "data": {
-    "battery-cluster-01": { "soc": 0.82, "maxTemp": 31.5, "alarmLevel": 0 }
+    "battery-cluster-01": { "soc": 0.82, "maxTemp": 31.5, "power": 120, "alarmLevel": 0, "ts": 1730000000000 }
   }
 }
 ```
 
-- `type` 区分消息类型（状态帧 / 全量快照 / 心跳）；`alarmLevel` 等为稳定枚举，文案由前端映射表渲染，未知枚举走兜底文案。
-- 配套机制：断线重连、心跳、服务端顺序保证在实现阶段细化。
+- `type`：`snapshot`（连接建立后全量快照）/ `device-status`（增量状态帧）/ `heartbeat`（心跳）；
+- `alarmLevel` 等为稳定枚举，文案由前端映射表渲染，未知枚举走兜底文案；
+- 客户端机制：指数退避自动重连（2s 起、上限 30s）、30 秒心跳看门狗、组件卸载自动断开；
+- 参考实现：`web/mock/server.mjs`（同时静态托管转换产物，用于本地演示）。
 
-## 4. 项目结构（规划）
+## 4. 项目结构（实现）
 
 ```text
 pointcloud-twin/
-├── cmd/pc2twin/        # Go CLI 入口
+├── cmd/pc2twin/        # CLI 入口（convert / pcd2las / version）
 ├── internal/
-│   ├── pcd/            # PCD 读取（ASCII/binary）
-│   ├── las/            # LAS 写入
-│   ├── pipeline/       # 流水线编排（convert / pcd2las 子命令）
-│   └── proxy/          # 代理体配置读写与校验
-├── web/                # Vue 3 + Vite 示例查看器
-├── docs/               # 需求与方案文档
-└── .github/workflows/  # CI / Lint / Release / CodeQL
+│   ├── pcd/            # PCD 读取（ascii / binary / binary_compressed）
+│   ├── pcdfix/         # PCD 测试夹具与示例数据生成
+│   ├── las/            # LAS 1.4 写入
+│   ├── tiler/          # 3D Tiles 生成（八叉树 / glb / pnts / tileset）
+│   ├── downsample/     # 体素降采样
+│   ├── proxy/          # 代理体配置读写与校验
+│   ├── crs/            # ENU 原点定义与解析
+│   ├── geo/            # WGS84 坐标换算
+│   ├── pipeline/       # 流水线编排与转换报告
+│   ├── apperr/         # 稳定错误码
+│   └── logx/           # slog 日志构造
+├── web/                # Vue 3 示例查看器 + 模拟数据源（mock/server.mjs）
+├── examples/           # 示例点云与设备配置
+├── docs/               # 需求、方案与 CLI 文档
+└── .github/workflows/  # CI / CodeQL / Release（goreleaser 多平台发布）
 ```
 
 ## 5. 风险与开放问题
 
 | 风险/问题 | 说明 | 缓解 |
 |---|---|---|
-| Go PCD 库成熟度 | `pcgol`/`dereklison/pcd` 对 binary PCD 支持需验证 | 实现首周做 spike 验证；不行则自研解析器（格式规范简单） |
-| gocesiumtiler AGPL | 闭源商用需商业许可 | 项目采用 AGPL-3.0；商用路径在 README 注明 |
-| 大文件内存 | 亿级点云全量驻留内存有风险 | 首版限定千万点级；流水线化分块处理列入后续版本 |
+| 大文件内存 | 亿级点云全量驻留内存有风险 | 首版限定千万点级（PCD binary 全量读入 + 点切片）；流水线化分块处理列入后续版本 |
+| 自研切片引擎兼容性 | 需持续跟随 3D Tiles 规范演进 | 按 OGC 3D Tiles 1.1 规范实现并以 CesiumJS 为验收基准；单元测试覆盖 GLB/pnts 二进制布局 |
+| 瓦片体积 | 首版无 meshopt 压缩/量化 | 后续版本引入 `KHR_mesh_quantization` + `EXT_meshopt_compression` |
 | 坐标系错误难察觉 | CRS 配错会导致瓦片位置漂移 | 输出转换报告（点数、包围盒、原点），查看器叠加校验 |
+| gocesiumtiler 外部路径 | 用户自带 gocesiumtiler 处理 LAS 时需自行处理其 CRS 参数 | 文档说明其 `--crs` 用法与本项目 LAS 的 ENU 语义 |
 
 ## 6. 与需求的对齐
 
-本方案覆盖 [requirements.md](requirements.md) 的 R1–R5；S1/S2 对应 PDAL 备选路径与查看器内标注工具；第 5 节"明确不做"项均不在方案范围内。
+本方案覆盖 [requirements.md](requirements.md) 的 R1–R5：R1 由 `internal/pcd` + `internal/tiler` 落地（3D Tiles 1.1 默认、1.0 可选、降采样可选）；R2 由 `internal/crs`/`internal/geo` + LAS 双 VLR + tileset 根变换 + 转换报告落地；R3 由 `internal/proxy` 与 `--devices` 流程落地；R4 由 cobra CLI + slog + `apperr` 错误码落地（文档见 [cli.md](cli.md)）；R5 由 `web/` 查看器与 mock 数据源落地。S1 部分落地（体素降采样）；S2（图形化标注）、S3（REST 异步任务化）、S4（批量多站点）不在首版范围。
