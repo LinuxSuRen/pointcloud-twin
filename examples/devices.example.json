@@ -1,0 +1,46 @@
+{
+  "devices": [
+    {
+      "deviceId": "battery-cluster-01",
+      "deviceType": "battery-cluster",
+      "center": [12, 5.3, 1.5],
+      "size": [12, 2.6, 3],
+      "heading": 0
+    },
+    {
+      "deviceId": "battery-cluster-02",
+      "deviceType": "battery-cluster",
+      "center": [28, 5.3, 1.5],
+      "size": [12, 2.6, 3],
+      "heading": 0
+    },
+    {
+      "deviceId": "battery-cluster-03",
+      "deviceType": "battery-cluster",
+      "center": [44, 5.3, 1.5],
+      "size": [12, 2.6, 3],
+      "heading": 0
+    },
+    {
+      "deviceId": "battery-cluster-04",
+      "deviceType": "battery-cluster",
+      "center": [12, 13.3, 1.5],
+      "size": [12, 2.6, 3],
+      "heading": 0
+    },
+    {
+      "deviceId": "battery-cluster-05",
+      "deviceType": "battery-cluster",
+      "center": [28, 13.3, 1.5],
+      "size": [12, 2.6, 3],
+      "heading": 0
+    },
+    {
+      "deviceId": "pcs-01",
+      "deviceType": "pcs",
+      "center": [44.5, 13.2, 1.2],
+      "size": [5, 2.4, 2.4],
+      "heading": 0
+    }
+  ]
+}

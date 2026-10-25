@@ -1,5 +1,6 @@
 # Go
 dist/
+bin/
 *.test
 
 # Node / Vue
@@ -14,3 +15,7 @@ web/dist/
 # 转换产物（示例输出不入库）
 *.las
 out/
+out-demo/
+
+# serve 服务数据目录（上传暂存与任务产物）
+pc2twin-data/
