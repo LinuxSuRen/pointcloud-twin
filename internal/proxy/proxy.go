@@ -41,9 +41,14 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, apperr.New(apperr.E4001, err, path)
 	}
+	return LoadFromBytes(data)
+}
+
+// LoadFromBytes 从 JSON 字节读取配置。
+func LoadFromBytes(data []byte) (*Config, error) {
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, apperr.New(apperr.E4001, err, path)
+		return nil, apperr.New(apperr.E4001, err, "配置解析失败")
 	}
 	return &c, nil
 }
