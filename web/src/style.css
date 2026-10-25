@@ -80,6 +80,14 @@ body {
   inset: 0;
 }
 
+/* Cesium 画布跟随容器尺寸 */
+.viewer-container .cesium-viewer,
+.viewer-container .cesium-widget,
+.viewer-container .cesium-widget canvas {
+  width: 100%;
+  height: 100%;
+}
+
 .viewer-container .cesium-widget-credits {
   display: none;
 }
