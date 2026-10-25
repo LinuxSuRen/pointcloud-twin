@@ -21,6 +21,8 @@ export default defineConfig({
       // 开发态把瓦片与 WebSocket 代理到 mock 服务器（pnpm mock）
       '/tiles': 'http://127.0.0.1:8787',
       '/ws': { target: 'ws://127.0.0.1:8787', ws: true },
+      // 转换服务（pc2twin serve）——网页导入 PCD 的上传/任务/SSE 接口
+      '/api': 'http://127.0.0.1:8080',
     },
   },
   test: {
