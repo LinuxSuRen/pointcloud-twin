@@ -44,10 +44,12 @@ type jobError struct {
 }
 
 type jobResult struct {
-	TilesUrl   string `json:"tilesUrl"`
-	DevicesUrl string `json:"devicesUrl,omitempty"`
-	ReportUrl  string `json:"reportUrl"`
-	HasDevices bool   `json:"hasDevices"`
+	TilesUrl     string `json:"tilesUrl"`
+	DevicesUrl   string `json:"devicesUrl,omitempty"`
+	ReportUrl    string `json:"reportUrl"`
+	HasDevices   bool   `json:"hasDevices"`
+	ExportZipUrl string `json:"exportZipUrl"`
+	ExportGlbUrl string `json:"exportGlbUrl"`
 }
 
 // Job 是一次转换任务。
@@ -246,9 +248,11 @@ func (m *JobManager) run(job *Job, req CreateJobRequest, pcdPath, devicesPath st
 	switch {
 	case err == nil:
 		result := &jobResult{
-			TilesUrl:   fmt.Sprintf("/api/jobs/%s/out/tileset.json", job.ID),
-			ReportUrl:  fmt.Sprintf("/api/jobs/%s/out/report.json", job.ID),
-			HasDevices: devicesPath != "",
+			TilesUrl:     fmt.Sprintf("/api/jobs/%s/out/tileset.json", job.ID),
+			ReportUrl:    fmt.Sprintf("/api/jobs/%s/out/report.json", job.ID),
+			HasDevices:   devicesPath != "",
+			ExportZipUrl: fmt.Sprintf("/api/jobs/%s/export", job.ID),
+			ExportGlbUrl: fmt.Sprintf("/api/jobs/%s/export/glb", job.ID),
 		}
 		if devicesPath != "" {
 			result.DevicesUrl = fmt.Sprintf("/api/jobs/%s/out/devices.json", job.ID)

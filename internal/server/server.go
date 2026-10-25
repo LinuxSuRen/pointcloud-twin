@@ -99,6 +99,8 @@ func (s *Server) routes() {
 		s.jobs.handleEvents(w, r, r.PathValue("id"))
 	})
 	s.mux.HandleFunc("GET /api/jobs/{id}/out/{path...}", s.handleJobOut)
+	s.mux.HandleFunc("GET /api/jobs/{id}/export", s.handleExportZip)
+	s.mux.HandleFunc("GET /api/jobs/{id}/export/glb", s.handleExportGLB)
 }
 
 // handleJobOut 托管转换产物（tileset.json / tiles / devices.json / report.json）。
