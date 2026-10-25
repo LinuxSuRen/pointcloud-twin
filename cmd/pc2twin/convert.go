@@ -49,7 +49,7 @@ func newConvertCmd() *cobra.Command {
 				Log:           log,
 				ToolVersion:   version,
 			}
-			if err := pipeline.Convert(opt); err != nil {
+			if err := pipeline.Convert(cmd.Context(), opt); err != nil {
 				log.Debug("转换失败", "err", err.Error())
 				return err
 			}

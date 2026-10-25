@@ -25,6 +25,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newConvertCmd(),
 		newPCD2LASCmd(),
+		newServeCmd(),
 		newVersionCmd(),
 	)
 	return root

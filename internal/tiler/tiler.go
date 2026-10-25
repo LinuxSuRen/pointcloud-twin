@@ -1,6 +1,7 @@
 package tiler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,10 @@ type Options struct {
 	// Origin 是 ENU 原点；瓦片集根变换把局部 ENU 摆到该地理位置。
 	Origin crs.ENUOrigin
 	Log    *slog.Logger
+	// Ctx 取消时在瓦片写出间隙终止，返回 ctx 的错误。
+	Ctx context.Context
+	// Progress 是可选回调：每写出一个瓦片上报 written/total。
+	Progress func(written, total int)
 }
 
 // Stats 是瓦片集生成统计，供转换报告使用。
@@ -88,6 +93,9 @@ func Build(cloud *pcd.Cloud, opt Options) (*Stats, error) {
 		refine:  refine,
 		outDir:  opt.OutputDir,
 		log:     log,
+		ctx:     opt.Ctx,
+		onTile:  opt.Progress,
+		total:   countTiles(root),
 	}
 	rootTile, err := b.emit(root, root.center, true, opt.Origin, 1)
 	if err != nil {
@@ -122,14 +130,34 @@ type builder struct {
 	refine     string
 	outDir     string
 	log        *slog.Logger
+	ctx        context.Context
+	onTile     func(written, total int)
 	tileCount  int
 	pointCount int
 	maxDepth   int
+	total      int
+}
+
+// countTiles 统计携带内容的瓦片数，作为进度总量。
+func countTiles(n *tileNode) int {
+	c := 0
+	if len(n.content) > 0 {
+		c++
+	}
+	for _, ch := range n.children {
+		c += countTiles(ch)
+	}
+	return c
 }
 
 // emit 递归写出瓦片并构造 tile JSON。parentCenter 为父瓦片中心（局部 ENU）；
 // isRoot 表示这是根瓦片（transform = ENU→ECEF × 平移）。
 func (b *builder) emit(node *tileNode, parentCenter [3]float64, isRoot bool, origin crs.ENUOrigin, depth int) (*tileJSON, error) {
+	if b.ctx != nil {
+		if err := b.ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	if depth > b.maxDepth {
 		b.maxDepth = depth
 	}
@@ -210,6 +238,9 @@ func (b *builder) emit(node *tileNode, parentCenter [3]float64, isRoot bool, ori
 		tile.Content = &contentJSON{URI: name}
 		b.tileCount++
 		b.pointCount += len(node.content)
+		if b.onTile != nil && b.total > 0 {
+			b.onTile(b.tileCount, b.total)
+		}
 	}
 
 	for _, child := range node.children {

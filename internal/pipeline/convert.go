@@ -2,6 +2,7 @@
 package pipeline
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +15,21 @@ import (
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/proxy"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/tiler"
+)
+
+// ProgressFunc 是转换进度回调：stage 为阶段标识，percent 为 0~100，
+// message 为可直接展示的中文描述。服务化场景驱动 SSE 进度流。
+type ProgressFunc func(stage string, percent float64, message string)
+
+// 阶段权重（百分比）：读取 30 / 降采样 10 / LAS 15 / 切片 45
+const (
+	weightLoad  = 30.0
+	weightVoxel = 10.0
+	weightLAS   = 15.0
+	weightTiles = 45.0
+	baseVoxel   = weightLoad
+	baseLAS     = weightLoad + weightVoxel
+	baseTiles   = weightLoad + weightVoxel + weightLAS
 )
 
 // ConvertOptions 是 convert 子命令的完整参数。
@@ -32,25 +48,39 @@ type ConvertOptions struct {
 	Log     *slog.Logger
 	// ToolVersion 记录进转换报告。
 	ToolVersion string
+	// Progress 是可选的进度回调。
+	Progress ProgressFunc
 }
 
 // Convert 执行完整转换：PCD →（可选降采样）→ LAS + 3D Tiles + 代理体配置 + 报告。
-func Convert(opt ConvertOptions) error {
+// ctx 取消时在阶段边界终止并返回 ctx 的错误（调用方据此区分「已取消」与「失败」）。
+func Convert(ctx context.Context, opt ConvertOptions) error {
 	log := opt.Log
 	if log == nil {
 		log = slog.Default()
 	}
+	emit := func(stage string, percent float64, message string) {
+		if opt.Progress != nil {
+			opt.Progress(stage, percent, message)
+		}
+	}
 	started := time.Now()
 	log.Info("转换开始", "stage", "convert",
 		"input", opt.Input, "output", opt.OutputDir, "origin", opt.Origin.String())
+	emit("load", 0, "正在读取点云")
 
 	cloud, err := loadPCD(opt.Input, log)
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	inputPoints := len(cloud.Points)
+	emit("load", weightLoad, "点云读取完成")
 
 	if opt.Voxel > 0 {
+		emit("voxel", baseVoxel, "正在降采样")
 		t := time.Now()
 		cloud.Points = downsample.Voxel(cloud.Points, opt.Voxel)
 		cloud.RecomputeBounds()
@@ -60,10 +90,15 @@ func Convert(opt ConvertOptions) error {
 		if len(cloud.Points) == 0 {
 			return apperr.New(apperr.E1004, nil, "降采样后没有剩余点，请增大 --voxel")
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		emit("voxel", baseLAS, "降采样完成")
 	}
 
 	lasRel := ""
 	if !opt.SkipLAS {
+		emit("las", baseLAS, "正在写入 LAS 桥接文件")
 		lasPath := filepath.Join(opt.OutputDir, filepath.Base(opt.Input)+".las")
 		t := time.Now()
 		if err := las.Write(lasPath, cloud, las.WriteOptions{
@@ -75,6 +110,10 @@ func Convert(opt ConvertOptions) error {
 		log.Info("LAS 写入完成", "stage", "las",
 			"path", lasPath, "points", len(cloud.Points),
 			"dur", time.Since(t).Round(time.Millisecond).String())
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		emit("las", baseTiles, "LAS 写入完成")
 	}
 
 	stats, err := tiler.Build(cloud, tiler.Options{
@@ -84,10 +123,19 @@ func Convert(opt ConvertOptions) error {
 		Version:       opt.TilesVersion,
 		Origin:        opt.Origin,
 		Log:           log,
+		Ctx:           ctx,
+		Progress: func(written, total int) {
+			pct := baseTiles + weightTiles*float64(written)/float64(total)
+			if pct > 100 {
+				pct = 100
+			}
+			emit("tiles", pct, "正在生成瓦片")
+		},
 	})
 	if err != nil {
 		return err
 	}
+	emit("tiles", 100, "瓦片生成完成")
 
 	if opt.DevicesFile != "" {
 		t := time.Now()
@@ -120,6 +168,7 @@ func Convert(opt ConvertOptions) error {
 		"points", len(cloud.Points), "tiles", stats.Tiles,
 		"devicesProvided", opt.DevicesFile != "",
 		"dur", time.Since(started).Round(time.Millisecond).String())
+	emit("done", 100, "转换完成")
 	return nil
 }
 

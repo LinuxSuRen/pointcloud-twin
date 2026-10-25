@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -79,7 +80,7 @@ func TestConvertEndToEnd(t *testing.T) {
 		Log:           quietLogger(),
 		ToolVersion:   "test",
 	}
-	if err := Convert(opt); err != nil {
+	if err := Convert(context.Background(), opt); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,7 +129,7 @@ func TestConvertSkipLASAndVoxel(t *testing.T) {
 		Input: input, OutputDir: out, Voxel: 0.5,
 		PointsPerTile: 5000, SkipLAS: true, Log: quietLogger(),
 	}
-	if err := Convert(opt); err != nil {
+	if err := Convert(context.Background(), opt); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(out, "site.pcd.las")); !os.IsNotExist(err) {
@@ -142,11 +143,25 @@ func TestConvertSkipLASAndVoxel(t *testing.T) {
 
 func TestConvertInputMissing(t *testing.T) {
 	dir := t.TempDir()
-	err := Convert(ConvertOptions{
+	err := Convert(context.Background(), ConvertOptions{
 		Input: filepath.Join(dir, "nope.pcd"), OutputDir: dir, Log: quietLogger(),
 	})
 	if err == nil {
 		t.Fatal("应报错")
+	}
+}
+
+// TestConvertCancelled 验证 ctx 取消在阶段边界生效并原样返回取消错误。
+func TestConvertCancelled(t *testing.T) {
+	dir := t.TempDir()
+	input := fixturePCD(t, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 进入前即取消
+	err := Convert(ctx, ConvertOptions{
+		Input: input, OutputDir: filepath.Join(dir, "out"), Log: quietLogger(),
+	})
+	if err != context.Canceled {
+		t.Fatalf("应返回 context.Canceled，实际：%v", err)
 	}
 }
 
