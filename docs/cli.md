@@ -100,8 +100,29 @@ pc2twin serve --addr 127.0.0.1:8080 --data ./pc2twin-data
 | E7003 | 上传会话无效（不存在、未定稿、校验失败） |
 | E7004 | 任务不存在或已过期 |
 | E7005 | 当前连接不支持流式响应 |
+| E7006 | 导出点数超限（默认 800 万点，请导入时降采样） |
 | E9001 | 任务内部错误（服务端已隔离，详见日志） |
 | E9002 | 转换失败（未归类错误） |
+
+### `pc2twin export`
+
+把点云与设备代理体组装为**单文件 GLB**（glTF 2.0 二进制）数字孪生模型，可导入 UE / Unity / Blender / three.js 等通用引擎。
+
+```bash
+pc2twin export --input site.pcd --devices devices.json --output twin.glb --voxel 0.05
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--input, -i` | 输入 PCD 文件路径（必填） |
+| `--devices` | 设备代理体配置（JSON，可选；提供时设备以彩色盒体网格导出） |
+| `--output, -o` | 输出 GLB 文件路径（必填） |
+| `--voxel` | 导出时体素降采样边长（米）；0 表示不降采样 |
+| `--log-level` | 日志级别 |
+
+模型结构：根节点携带 z-up→y-up 矩阵（导入通用引擎后方向正确），子节点为 `pointcloud`（POINTS 图元，顶点色保留）与每台设备一个盒体节点（translation/rotation/scale 对应 center/heading/size，材质按 deviceType 着色）。
+
+serve 侧对应接口：`GET /api/jobs/{id}/export`（zip 打包 3D Tiles 产物）与 `GET /api/jobs/{id}/export/glb`（现场生成 GLB），查看器在场景来自导入任务时显示「导出 zip / 导出 GLB」按钮。
 
 ### `pc2twin version`
 

@@ -70,6 +70,20 @@ pc2twin serve --addr 127.0.0.1:8080 --data ./pc2twin-data
 
 启动转换服务后，查看器右上角会出现「导入 PCD」入口：选择 PCD 文件（可附带 devices.json 与转换参数）→ 分片上传（断点续传、SHA-256 校验）→ SSE 实时进度 → 完成后场景自动切换到新点云。API 细节见 [docs/cli.md](docs/cli.md) 的 `serve` 一节。
 
+### 5. 导出数字孪生模型到其他平台
+
+场景来自导入任务时，查看器右上角出现「导出」入口（也可用 CLI）：
+
+```bash
+# zip：3D Tiles 目录 + devices.json + report.json，部署到 CesiumJS / Cesium for UE / Unity
+# （查看器按钮等价于 GET /api/jobs/{id}/export）
+
+# GLB：单文件数字孪生模型（点云 + 设备盒体），导入 UE / Unity / Blender / three.js
+pc2twin export --input site.pcd --devices devices.json --output twin.glb --voxel 0.05
+```
+
+GLB 坐标为本地 ENU（米），根节点携带 z-up→y-up 变换；大点云建议 `--voxel` 降采样控制体积（serve 导出上限 800 万点）。
+
 ## 仓库结构
 
 ```text

@@ -19,6 +19,8 @@ import ImportDialog from './components/ImportDialog.vue'
 
 const viewerEl = ref(null)
 const importVisible = ref(false)
+/** 当前场景来自某次导入任务时的导出地址（zip / GLB） */
+const exportUrls = ref(null)
 let viewer = null
 let pickHandler = null
 let wsClient = null
@@ -163,6 +165,14 @@ const handleImportCompleted = (result) => {
   if (result?.tilesUrl) {
     loadScene(result.tilesUrl, result.devicesUrl || null)
   }
+  exportUrls.value = result?.exportZipUrl
+    ? { zip: result.exportZipUrl, glb: result.exportGlbUrl }
+    : null
+}
+
+// 原生导航下载（attachment 响应不会离开页面，且避免 fetch→blob 占用内存）
+const download = (url) => {
+  window.location.assign(url)
 }
 </script>
 
@@ -172,6 +182,14 @@ const handleImportCompleted = (result) => {
       <span class="app-header__brand">pointcloud-twin 查看器</span>
       <StatusBar />
       <span class="app-header__spacer"></span>
+      <template v-if="exportUrls">
+        <button class="app-header__btn" type="button" @click="download(exportUrls.zip)">
+          导出 zip
+        </button>
+        <button class="app-header__btn" type="button" @click="download(exportUrls.glb)">
+          导出 GLB
+        </button>
+      </template>
       <button class="app-header__btn" type="button" @click="importVisible = true">导入 PCD</button>
     </header>
     <aside class="sidebar">

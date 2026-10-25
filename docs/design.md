@@ -81,6 +81,12 @@ pc2twin pcd2las --input site.pcd --output site.las
 - **产物托管**：`GET /api/jobs/{id}/out/*` 直接供查看器加载；前端完成后销毁旧底图与实体并切换场景。
 - **前端引擎**：并发窗口 3（夹紧 1~6）+ 单片重试 3 次（重试前先查 status 对账）；会话 404 自动重新 initiate 并经回调持久化（刷新页面可续传）；大文件流式 SHA-256（自实现增量实现，内存恒定）；进度以服务端 received_chunks 口径回调。
 
+### 2.6 导出到其他平台（internal/export）
+
+- **zip 打包**：`GET /api/jobs/{id}/export` 把任务产物目录（3D Tiles + devices.json + report.json）递归打包为 zip，部署到 CesiumJS / Cesium for UE / Unity 等 Cesium 系平台。
+- **单文件 GLB**：`pc2twin export` CLI 与 `GET /api/jobs/{id}/export/glb` 现场生成——根节点携带 z-up→y-up 矩阵（本地 ENU 坐标、米制），子节点为点云（POINTS 图元 + 顶点色）与每台设备的盒体网格（TRS 对应 center/heading/size，材质按 deviceType 着色）；可导入 UE/Unity/Blender/three.js 等通用引擎。serve 导出设 800 万点上限（体积保护，超限提示导入时降采样）。
+- **前端下载**：查看器在场景来自导入任务时显示导出按钮，使用原生导航下载（attachment 响应不离开页面，避免 fetch→blob 整文件驻留内存）。
+
 ## 3. 前端示例查看器（Vue 3）
 
 - **技术栈**：Vue 3 + Vite + CesiumJS；构建产物为静态站点，可直接对接任意静态托管。
