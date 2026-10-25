@@ -1,6 +1,7 @@
 // Cesium 场景封装：查看器初始化（不依赖 ion）、3D Tiles 加载、
 // 设备代理体实体管理与点选交互。
 import * as Cesium from 'cesium'
+import { createPanel } from './panel.js'
 
 // createViewer 构造一个无影像底图、无 ion 依赖的查看器（离线可用）。
 export function createViewer(container) {
@@ -35,8 +36,8 @@ export async function loadTileset(viewer, url) {
   return tileset
 }
 
-// addDeviceEntities 依据代理体配置生成半透明盒体与标签实体。
-// 返回 deviceId → entity 映射表。
+// addDeviceEntities 依据代理体配置生成设备实体：盒面贴动态数据面板
+// （Canvas 纹理），描边随状态变色。返回 deviceId → {entity, panel} 映射。
 export function addDeviceEntities(viewer, devices, origin) {
   const originCarto = origin ?? { lon: 0, lat: 0, h: 0 }
   const originCartesian = Cesium.Cartesian3.fromDegrees(originCarto.lon, originCarto.lat, originCarto.h || 0)
@@ -51,13 +52,14 @@ export function addDeviceEntities(viewer, devices, origin) {
     )
     const hpr = new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(d.heading || 0), 0, 0)
     const orientation = Cesium.Transforms.headingPitchRollQuaternion(center, hpr)
+    const panel = createPanel(d)
     const entity = viewer.entities.add({
       id: d.deviceId,
       position: center,
       orientation,
       box: {
         dimensions: new Cesium.Cartesian3(d.size[0], d.size[1], d.size[2]),
-        material: Cesium.Color.fromCssColorString('#3d9ff0').withAlpha(0.28),
+        material: new Cesium.ImageMaterialProperty({ image: panel.canvas, transparent: false }),
         outline: true,
         outlineColor: Cesium.Color.fromCssColorString('#3d9ff0'),
       },
@@ -71,7 +73,7 @@ export function addDeviceEntities(viewer, devices, origin) {
         distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 400),
       },
     })
-    byId.set(d.deviceId, entity)
+    byId.set(d.deviceId, { entity, panel })
   }
   return byId
 }
@@ -100,12 +102,10 @@ export function flyToDevice(viewer, entity) {
   viewer.flyTo(entity, { duration: 0.8 })
 }
 
-// setEntityStatus 依据状态颜色更新代理体材质。
-export function setEntityStatus(entity, cssColor, alpha = 0.28) {
+// setEntityStatus 依据状态颜色更新代理体描边（盒面已由数据面板纹理承载）。
+export function setEntityStatus(entity, cssColor) {
   if (!entity?.box) {
     return
   }
-  const color = Cesium.Color.fromCssColorString(cssColor)
-  entity.box.material = color.withAlpha(alpha)
-  entity.box.outlineColor = color
+  entity.box.outlineColor = Cesium.Color.fromCssColorString(cssColor)
 }

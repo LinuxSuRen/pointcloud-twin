@@ -85,7 +85,7 @@ pc2twin pcd2las --input site.pcd --output site.las
 
 - **技术栈**：Vue 3 + Vite + CesiumJS；构建产物为静态站点，可直接对接任意静态托管。
 - **加载底图**：`Cesium3DTileset.fromUrl` 加载 `tileset.json`（查看器不依赖 Cesium ion，离线可用）。
-- **渲染代理体**：读取 `devices.json`，按 `origin`（convert 注入的 ENU 原点）构造 ENU→ECEF 变换，为每台设备生成半透明盒体实体与标签，建立 `deviceId → 实体` 映射表；点击或侧栏选中可查看详情。
+- **渲染代理体**：读取 `devices.json`，按 `origin`（convert 注入的 ENU 原点）构造 ENU→ECEF 变换，为每台设备生成盒体实体：**盒面贴 Canvas 动态数据面板**（SOC/温度/功率/告警仪表盘，WebSocket 数据到达后按 1 秒节流批量重绘），描边随状态变色；建立 `deviceId → 实体` 映射表；点击或侧栏选中可查看详情。
 - **状态数据通路**：WebSocket 接收数据帧，前端查映射表更新材质颜色与标签。告警等级转红、注意/低电量转黄、正常为绿；状态文案由前端映射表渲染，未知枚举走兜底文案。
 - **为什么不在点云上直接承载状态**：3D Tiles 1.1 的 `EXT_structural_metadata` 与 Batch Table 确实支持要素级元数据，但对设备粒度的状态展示，代理体方案在更新性能、交互响应与视觉清晰度上远优于百万级点云逐点着色。
 

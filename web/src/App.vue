@@ -24,14 +24,30 @@ let pickHandler = null
 let wsClient = null
 let currentTileset = null
 let sceneToken = 0
-/** deviceId → Cesium Entity */
+let panelTimer = null
+/** deviceId → { entity, panel } */
 const entityMap = new Map()
+/** 待重绘面板的设备集合（数据帧到达时标记，定时器批量刷新） */
+const panelDirty = new Set()
 let config = null
 
-const refreshEntityStatus = () => {
-  for (const [id, entity] of entityMap) {
-    setEntityStatus(entity, statusColor(store.metrics[id]))
+const markDirty = (ids) => {
+  for (const id of ids) {
+    panelDirty.add(id)
   }
+}
+
+// flushPanels 批量重绘脏设备的面板纹理与描边（节流，1 秒一拍）。
+const flushPanels = () => {
+  for (const id of panelDirty) {
+    const entry = entityMap.get(id)
+    if (!entry) {
+      continue
+    }
+    entry.panel.update(store.metrics[id])
+    setEntityStatus(entry.entity, statusColor(store.metrics[id]))
+  }
+  panelDirty.clear()
 }
 
 const handleFrame = (frame) => {
@@ -40,7 +56,7 @@ const handleFrame = (frame) => {
   }
   if (frame.type === 'device-status' || frame.type === 'snapshot') {
     applyStatusFrame(frame.data)
-    refreshEntityStatus()
+    markDirty(Object.keys(frame.data || {}))
   }
   // heartbeat 仅用于维持连接与看门狗，无需处理
 }
@@ -61,6 +77,7 @@ const loadScene = async (tilesUrl, devicesUrl) => {
   }
   viewer.entities.removeAll()
   entityMap.clear()
+  panelDirty.clear()
 
   loadTileset(viewer, tilesUrl)
     .then((tileset) => {
@@ -86,8 +103,8 @@ const loadScene = async (tilesUrl, devicesUrl) => {
       }
       store.devices = Array.isArray(devicesConfig?.devices) ? devicesConfig.devices : []
       const map = addDeviceEntities(viewer, store.devices, devicesConfig?.origin)
-      for (const [id, entity] of map) {
-        entityMap.set(id, entity)
+      for (const [id, entry] of map) {
+        entityMap.set(id, entry)
       }
     } catch {
       if (token === sceneToken) {
@@ -114,10 +131,16 @@ onMounted(async () => {
       store.wsState = state
     },
   })
+
+  // 面板纹理按 1 秒节流批量重绘
+  panelTimer = setInterval(flushPanels, 1000)
 })
 
 onUnmounted(() => {
-  // 自清理：断开 WS、销毁交互与查看器
+  // 自清理：断开 WS、停掉面板重绘、销毁交互与查看器
+  if (panelTimer) {
+    clearInterval(panelTimer)
+  }
   if (wsClient) {
     wsClient.close()
   }
@@ -131,7 +154,7 @@ onUnmounted(() => {
 
 const handleSelect = (id) => {
   selectDevice(id)
-  flyToDevice(viewer, entityMap.get(id))
+  flyToDevice(viewer, entityMap.get(id)?.entity)
 }
 
 // 导入完成后切换到新转换出的场景（WebSocket 状态驱动继续生效）
