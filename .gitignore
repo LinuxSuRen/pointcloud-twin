@@ -1,0 +1,16 @@
+# Go
+dist/
+*.test
+
+# Node / Vue
+node_modules/
+web/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# 转换产物（示例输出不入库）
+*.las
+out/
