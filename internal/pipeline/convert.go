@@ -13,6 +13,7 @@ import (
 	"github.com/LinuxSuRen/pointcloud-twin/internal/downsample"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/las"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
+	"github.com/LinuxSuRen/pointcloud-twin/internal/planes"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/proxy"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/tiler"
 )
@@ -50,6 +51,8 @@ type ConvertOptions struct {
 	ToolVersion string
 	// Progress 是可选的进度回调。
 	Progress ProgressFunc
+	// PlaneSpec 是可选的平面拟合分割参数（k=v 串，见 planes.ParseOptions）；空 = 关闭。
+	PlaneSpec string
 }
 
 // Convert 执行完整转换：PCD →（可选降采样）→ LAS + 3D Tiles + 代理体配置 + 报告。
@@ -116,6 +119,40 @@ func Convert(ctx context.Context, opt ConvertOptions) error {
 		emit("las", baseTiles, "LAS 写入完成")
 	}
 
+	// 平面拟合分割：大平面重建成面片，残余点进入点瓦片
+	var detected []planes.Plane
+	var planeInfo *ReportPlanes
+	if opt.PlaneSpec != "" {
+		emit("planes", baseTiles, "正在做平面拟合分割")
+		popt, err := planes.ParseOptions(opt.PlaneSpec)
+		if err != nil {
+			return apperr.New(apperr.E6001, err, "--planes："+err.Error())
+		}
+		before := len(cloud.Points)
+		t := time.Now()
+		detected, cloud.Points = planes.Detect(cloud.Points, popt)
+		if len(cloud.Points) > 0 {
+			cloud.RecomputeBounds()
+		} // 残余为空时保留检测前包围盒（报告仍有效）
+		log.Info("平面拟合分割完成", "stage", "planes",
+			"planes", len(detected), "before", before, "residual", len(cloud.Points),
+			"coveragePercent", planes.CoveragePercent(before, detected),
+			"dur", time.Since(t).Round(time.Millisecond).String())
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := planes.Save(filepath.Join(opt.OutputDir, "planes.json"), popt.Dist, detected); err != nil {
+			return apperr.New(apperr.E5001, err, "planes.json 写入失败")
+		}
+		planeInfo = &ReportPlanes{
+			Enabled:  true,
+			Dist:     popt.Dist,
+			Count:    len(detected),
+			Coverage: planes.CoveragePercent(before, detected),
+		}
+		emit("planes", baseTiles, "平面拟合分割完成")
+	}
+
 	stats, err := tiler.Build(cloud, tiler.Options{
 		OutputDir:     opt.OutputDir,
 		PointsPerTile: opt.PointsPerTile,
@@ -124,6 +161,7 @@ func Convert(ctx context.Context, opt ConvertOptions) error {
 		Origin:        opt.Origin,
 		Log:           log,
 		Ctx:           ctx,
+		Planes:        detected,
 		Progress: func(written, total int) {
 			pct := baseTiles + weightTiles*float64(written)/float64(total)
 			if pct > 100 {
@@ -159,7 +197,7 @@ func Convert(ctx context.Context, opt ConvertOptions) error {
 			"dur", time.Since(t).Round(time.Millisecond).String())
 	}
 
-	rep := newReport(opt, cloud, stats, lasRel, inputPoints)
+	rep := newReport(opt, cloud, stats, lasRel, inputPoints, planeInfo)
 	if err := writeReport(filepath.Join(opt.OutputDir, "report.json"), rep); err != nil {
 		return err
 	}
@@ -239,7 +277,7 @@ func loadPCD(path string, log *slog.Logger) (*pcd.Cloud, error) {
 	return cloud, nil
 }
 
-func newReport(opt ConvertOptions, cloud *pcd.Cloud, stats *tiler.Stats, lasRel string, inputPoints int) *Report {
+func newReport(opt ConvertOptions, cloud *pcd.Cloud, stats *tiler.Stats, lasRel string, inputPoints int, planeInfo *ReportPlanes) *Report {
 	rep := &Report{
 		Tool:        "pointcloud-twin",
 		Version:     opt.ToolVersion,
@@ -263,5 +301,7 @@ func newReport(opt ConvertOptions, cloud *pcd.Cloud, stats *tiler.Stats, lasRel 
 	rep.Tiles.PointsPerTile = opt.PointsPerTile
 	rep.Tiles.RootGeometricError = stats.RootGeometricError
 	rep.Tiles.TreeDepth = stats.TreeDepth
+	rep.Tiles.Planes = stats.Planes
+	rep.Planes = planeInfo
 	return rep
 }

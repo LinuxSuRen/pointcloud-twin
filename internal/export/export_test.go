@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
+	"github.com/LinuxSuRen/pointcloud-twin/internal/planes"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/proxy"
 )
 
@@ -190,6 +191,67 @@ func TestBuildGLBEmptyDevices(t *testing.T) {
 	doc, _ := parseGLB(t, data)
 	if len(nodesOf(doc)) != 2 {
 		t.Fatal("应只有 root + 点云两个节点")
+	}
+}
+
+func TestBuildGLBWithPlanes(t *testing.T) {
+	cloud := sampleCloud(150)
+	// 一块 8×6 米地面 + 一块立面
+	ground := planes.Plane{
+		Normal: [3]float64{0, 0, 1}, Centroid: [3]float64{4, 4, 0}, Color: [3]uint8{90, 100, 80},
+		Polygon: [][3]float64{{0, 0, 0}, {8, 0, 0}, {8, 6, 0}, {0, 6, 0}},
+		Inliers: 1000,
+	}
+	wall := planes.Plane{
+		Normal: [3]float64{1, 0, 0}, Centroid: [3]float64{8, 3, 1.5}, Color: [3]uint8{120, 130, 140},
+		Polygon: [][3]float64{{8, 0, 0}, {8, 6, 0}, {8, 6, 3}, {8, 0, 3}},
+		Inliers: 500,
+	}
+	data, err := BuildGLB(cloud, nil, GLBOptions{Planes: []planes.Plane{ground, wall}, PlaneDist: 0.05})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := parseGLB(t, data)
+	nodes := nodesOf(doc)
+	var planeNodes int
+	for _, n := range nodes {
+		name, _ := n["name"].(string)
+		if strings.HasPrefix(name, "plane-") {
+			planeNodes++
+		}
+	}
+	if planeNodes != 2 {
+		t.Fatalf("应有 2 个平面节点，实际 %d", planeNodes)
+	}
+	// 残余过滤：地面上的点（150 个样例点 z∈{0..1} 且都在 8×6 地面范围内…按几何统计）
+	data2, _ := BuildGLB(cloud, nil, GLBOptions{Planes: []planes.Plane{ground}, PlaneDist: 0.05})
+	doc2, _ := parseGLB(t, data2)
+	var posCount float64
+	for _, a := range accessorsOf(doc2) {
+		if a["type"] == "VEC3" && a["count"].(float64) > posCount && a["count"].(float64) < 140 {
+			posCount = a["count"].(float64)
+		}
+	}
+	// z=0 的点被地面面片取代：60 个点中至少过滤掉一部分
+	if posCount >= 150 {
+		t.Fatalf("平面覆盖的点应被过滤：点云 accessor count = %v", posCount)
+	}
+}
+
+func TestFilterResidual(t *testing.T) {
+	ground := planes.Plane{
+		Normal: [3]float64{0, 0, 1}, Centroid: [3]float64{0, 0, 0}, Color: [3]uint8{1, 2, 3},
+		Polygon: [][3]float64{{-5, -5, 0}, {5, -5, 0}, {5, 5, 0}, {-5, 5, 0}},
+	}
+	pts := []pcd.Point{
+		{X: 0, Y: 0, Z: 0.01}, // 地面上 → 过滤
+		{X: 0, Y: 0, Z: 0.2},  // 距地面远 → 保留
+		{X: 0, Y: 0, Z: 10},   // 高处 → 保留
+		{X: 9, Y: 0, Z: 0},    // 平面外 → 保留
+	}
+	out := planes.FilterResidual(pts, []planes.Plane{ground}, 0.05)
+	if len(out) != 3 {
+		t.Fatalf("应保留 3 点，实际 %d", len(out))
 	}
 }
 

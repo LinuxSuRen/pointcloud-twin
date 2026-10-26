@@ -12,6 +12,7 @@ import (
 	"github.com/LinuxSuRen/pointcloud-twin/internal/crs"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcdfix"
+	"github.com/LinuxSuRen/pointcloud-twin/internal/planes"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/proxy"
 )
 
@@ -138,6 +139,41 @@ func TestConvertSkipLASAndVoxel(t *testing.T) {
 	rep := readReport(t, out)
 	if rep.Voxel != 0.5 || rep.Points.Tiled >= rep.Points.Input {
 		t.Fatalf("降采样报告异常：%+v", rep.Points)
+	}
+}
+
+// TestConvertWithPlanes 验证平面分割阶段产物与报告。
+func TestConvertWithPlanes(t *testing.T) {
+	dir := t.TempDir()
+	input := fixturePCD(t, dir)
+	out := filepath.Join(dir, "out-planes")
+	opt := ConvertOptions{
+		Input: input, OutputDir: out,
+		PointsPerTile: 5000,
+		PlaneSpec:     "dist=0.05,min=300,grid=0.2,tol=0.3",
+		Log:           quietLogger(),
+	}
+	if err := Convert(context.Background(), opt); err != nil {
+		t.Fatal(err)
+	}
+	// planes.json 存在且带平面
+	dist, ps, err := planes.Load(filepath.Join(out, "planes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dist != 0.05 || len(ps) == 0 {
+		t.Fatalf("planes.json 异常：dist=%v n=%d", dist, len(ps))
+	}
+	rep := readReport(t, out)
+	if rep.Planes == nil || !rep.Planes.Enabled || rep.Planes.Count == 0 || rep.Planes.Coverage <= 0 {
+		t.Fatalf("报告平面段异常：%+v", rep.Planes)
+	}
+	if rep.Tiles.Planes != len(ps) {
+		t.Fatalf("瓦片平面数 %d 与检测数 %d 不符", rep.Tiles.Planes, len(ps))
+	}
+	// 残余点进入点瓦片：tiled < input（fixture 以平面为主）
+	if rep.Points.Tiled >= rep.Points.Input {
+		t.Fatalf("平面分割后残余点应少于输入：%+v", rep.Points)
 	}
 }
 

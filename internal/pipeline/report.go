@@ -37,7 +37,18 @@ type Report struct {
 		PointsPerTile      int     `json:"pointsPerTile"`
 		RootGeometricError float64 `json:"rootGeometricError"`
 		TreeDepth          int     `json:"treeDepth"`
+		Planes             int     `json:"planes"`
 	} `json:"tiles"`
+	// Planes 是平面拟合分割统计（未启用时缺省）。
+	Planes *ReportPlanes `json:"planes,omitempty"`
+}
+
+// ReportPlanes 是平面分割的转换报告段。
+type ReportPlanes struct {
+	Enabled  bool    `json:"enabled"`
+	Dist     float64 `json:"dist"`
+	Count    int     `json:"count"`
+	Coverage float64 `json:"coveragePercent"`
 }
 
 func writeReport(path string, rep *Report) error {

@@ -7,10 +7,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/LinuxSuRen/pointcloud-twin/internal/crs"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
+	"github.com/LinuxSuRen/pointcloud-twin/internal/planes"
 )
 
 func gridCloud(n int) *pcd.Cloud {
@@ -284,6 +286,90 @@ func TestBuildTileset10(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(out, "tileset.json"))
 	if !bytes.Contains(raw, []byte(`"version": "1.0"`)) {
 		t.Fatalf("asset.version 应为 1.0：%s", raw)
+	}
+}
+
+func TestBuildWithPlanes(t *testing.T) {
+	cloud := gridCloud(4)
+	out := t.TempDir()
+	// 一块 10×10 米、z=0.5 的地平面
+	pl := planes.Plane{
+		Normal:   [3]float64{0, 0, 1},
+		Centroid: [3]float64{4, 4, 0.5},
+		Color:    [3]uint8{200, 120, 60},
+		Polygon: [][3]float64{
+			{-1, -1, 0.5}, {9, -1, 0.5}, {9, 9, 0.5}, {-1, 9, 0.5},
+		},
+		Inliers: 10000,
+	}
+	stats, err := Build(cloud, Options{
+		OutputDir: out, PointsPerTile: 10, Version: "1.1", Planes: []planes.Plane{pl},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Planes != 1 {
+		t.Fatalf("平面瓦片数 = %d", stats.Planes)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(out, "tileset.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ts struct {
+		Root struct {
+			Refine   string `json:"refine"`
+			Children []struct {
+				Transform []float64 `json:"transform"`
+				Content   *struct {
+					URI string `json:"uri"`
+				} `json:"content"`
+			} `json:"children"`
+		} `json:"root"`
+	}
+	if err := json.Unmarshal(raw, &ts); err != nil {
+		t.Fatal(err)
+	}
+	if ts.Root.Refine != "ADD" || len(ts.Root.Children) < 2 {
+		t.Fatalf("场景根应包裹点云树 + 平面瓦片：refine=%s children=%d", ts.Root.Refine, len(ts.Root.Children))
+	}
+
+	// 找到平面瓦片（最后一个子节点）并解析网格
+	planeTile := ts.Root.Children[len(ts.Root.Children)-1]
+	if planeTile.Content == nil || !strings.HasSuffix(planeTile.Content.URI, ".glb") {
+		t.Fatalf("平面瓦片内容异常：%+v", planeTile.Content)
+	}
+	data, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(planeTile.Content.URI)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary.LittleEndian.Uint32(data[0:4]) != glbMagic {
+		t.Fatal("平面瓦片 GLB 魔数错误")
+	}
+	jsonLen := int(binary.LittleEndian.Uint32(data[12:16]))
+	var gd struct {
+		Meshes []struct {
+			Primitives []struct {
+				Mode    int `json:"mode"`
+				Indices int `json:"indices"`
+			} `json:"primitives"`
+		} `json:"meshes"`
+		Accessors []struct {
+			Type  string `json:"type"`
+			Count int    `json:"count"`
+		} `json:"accessors"`
+	}
+	if err := json.Unmarshal(bytes.TrimRight(data[20:20+jsonLen], " "), &gd); err != nil {
+		t.Fatal(err)
+	}
+	if gd.Meshes[0].Primitives[0].Mode != 4 {
+		t.Fatal("平面瓦片应为 TRIANGLES")
+	}
+	if gd.Accessors[0].Type != "VEC3" || gd.Accessors[0].Count != 4 {
+		t.Fatalf("POSITION 应为 4 顶点：%+v", gd.Accessors[0])
+	}
+	if gd.Accessors[2].Type != "SCALAR" || gd.Accessors[2].Count != 6 {
+		t.Fatalf("四边形应三角化为 6 索引：%+v", gd.Accessors[2])
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/LinuxSuRen/pointcloud-twin/internal/crs"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/geo"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
+	"github.com/LinuxSuRen/pointcloud-twin/internal/planes"
 )
 
 // Options 控制 3D Tiles 生成。
@@ -31,6 +32,8 @@ type Options struct {
 	Ctx context.Context
 	// Progress 是可选回调：每写出一个瓦片上报 written/total。
 	Progress func(written, total int)
+	// Planes 是可选的平面分割结果：作为网格面片瓦片与点云树同层输出（仅 1.1）。
+	Planes []planes.Plane
 }
 
 // Stats 是瓦片集生成统计，供转换报告使用。
@@ -39,6 +42,7 @@ type Stats struct {
 	Points             int     `json:"points"`
 	RootGeometricError float64 `json:"rootGeometricError"`
 	TreeDepth          int     `json:"treeDepth"`
+	Planes             int     `json:"planes"`
 }
 
 const generator = "pointcloud-twin tiler"
@@ -86,7 +90,26 @@ func Build(cloud *pcd.Cloud, opt Options) (*Stats, error) {
 	log.Info("开始切分", "stage", "tile.octree", "points", len(points),
 		"pointsPerTile", target, "refine", refine, "version", version)
 
-	root := buildTree(points, indices, cloud.Min, cloud.Max, target, refine == "REPLACE", 0)
+	// 平面面片瓦片（仅 3D Tiles 1.1 支持网格内容）
+	meshPlanes := opt.Planes
+	if version != "1.1" && len(meshPlanes) > 0 {
+		log.Warn("平面分割结果仅在 --tiles-version 1.1 下生成瓦片，已跳过（planes.json 仍会输出）",
+			"stage", "tile.planes", "planes", len(meshPlanes))
+		meshPlanes = nil
+	}
+	if len(points) == 0 {
+		if len(meshPlanes) == 0 {
+			return nil, apperr.New(apperr.E1004, nil, "点云为空且无平面结果")
+		}
+		meshPlanes = keepValidPlanes(meshPlanes)
+	}
+
+	var root *tileNode
+	totalTiles := len(meshPlanes)
+	if len(points) > 0 {
+		root = buildTree(points, indices, cloud.Min, cloud.Max, target, refine == "REPLACE", 0)
+		totalTiles += countTiles(root)
+	}
 	b := &builder{
 		points:  points,
 		version: version,
@@ -95,11 +118,61 @@ func Build(cloud *pcd.Cloud, opt Options) (*Stats, error) {
 		log:     log,
 		ctx:     opt.Ctx,
 		onTile:  opt.Progress,
-		total:   countTiles(root),
+		total:   totalTiles,
 	}
-	rootTile, err := b.emit(root, root.center, true, opt.Origin, 1)
-	if err != nil {
-		return nil, err
+
+	var rootTile *tileJSON
+	if len(meshPlanes) > 0 {
+		// 场景根包裹：点云树（如有）+ 平面瓦片，统一挂到 ENU→ECEF 根变换下
+		sceneMin, sceneMax := planesBounds(meshPlanes)
+		if len(points) > 0 {
+			sceneMin, sceneMax = unionBounds(cloud.Min, cloud.Max, meshPlanes)
+		}
+		sceneCenter := [3]float64{
+			(sceneMin[0] + sceneMax[0]) / 2,
+			(sceneMin[1] + sceneMax[1]) / 2,
+			(sceneMin[2] + sceneMax[2]) / 2,
+		}
+		wrapper := &tileJSON{
+			Transform: geo.Mat4Mul(geo.ENUToECEFMatrix(opt.Origin.Lon, opt.Origin.Lat, opt.Origin.H),
+				geo.TranslateMatrix(sceneCenter[0], sceneCenter[1], sceneCenter[2])),
+			Refine: b.refine,
+		}
+		var diag float64
+		for i := 0; i < 3; i++ {
+			d := sceneMax[i] - sceneMin[i]
+			diag += d * d
+		}
+		wrapper.GeometricError = math.Sqrt(diag)
+		var box [12]float64
+		for i := 0; i < 3; i++ {
+			box[3+i*3+i] = (sceneMax[i] - sceneMin[i]) / 2
+		}
+		wrapper.BoundingVolume.Box = &box
+		if root != nil {
+			pointRoot, err := b.emit(root, sceneCenter, false, opt.Origin, 1)
+			if err != nil {
+				return nil, err
+			}
+			wrapper.GeometricError = pointRoot.GeometricError
+			wrapper.Children = append(wrapper.Children, pointRoot)
+		}
+		for i := range meshPlanes {
+			pt, err := b.emitPlane(&meshPlanes[i], sceneCenter)
+			if err != nil {
+				return nil, err
+			}
+			if pt != nil {
+				wrapper.Children = append(wrapper.Children, pt)
+			}
+		}
+		rootTile = wrapper
+	} else {
+		var err error
+		rootTile, err = b.emit(root, root.center, true, opt.Origin, 1)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	ts := newTileset(version)
@@ -118,10 +191,120 @@ func Build(cloud *pcd.Cloud, opt Options) (*Stats, error) {
 		Points:             b.pointCount,
 		RootGeometricError: rootTile.GeometricError,
 		TreeDepth:          b.maxDepth,
+		Planes:             len(meshPlanes),
 	}
 	log.Info("切分完成", "stage", "tile.octree",
-		"tiles", stats.Tiles, "pointsWritten", stats.Points, "depth", stats.TreeDepth)
+		"tiles", stats.Tiles, "pointsWritten", stats.Points, "depth", stats.TreeDepth,
+		"planes", stats.Planes)
 	return stats, nil
+}
+
+// unionBounds 求点云包围盒与所有平面多边形包围盒的并。
+func unionBounds(min, max [3]float64, ps []planes.Plane) ([3]float64, [3]float64) {
+	for _, p := range ps {
+		for _, v := range p.Polygon {
+			for i := 0; i < 3; i++ {
+				if v[i] < min[i] {
+					min[i] = v[i]
+				}
+				if v[i] > max[i] {
+					max[i] = v[i]
+				}
+			}
+		}
+	}
+	return min, max
+}
+
+// planesBounds 计算平面集合自身的包围盒。
+func planesBounds(ps []planes.Plane) ([3]float64, [3]float64) {
+	min, max := ps[0].Polygon[0], ps[0].Polygon[0]
+	for _, p := range ps {
+		for _, v := range p.Polygon {
+			for i := 0; i < 3; i++ {
+				if v[i] < min[i] {
+					min[i] = v[i]
+				}
+				if v[i] > max[i] {
+					max[i] = v[i]
+				}
+			}
+		}
+	}
+	return min, max
+}
+
+// keepValidPlanes 过滤无法构成面片的平面（多边形不足 3 点）。
+func keepValidPlanes(ps []planes.Plane) []planes.Plane {
+	out := ps[:0]
+	for _, p := range ps {
+		if len(p.Polygon) >= 3 {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// emitPlane 输出单个平面的面片瓦片。
+func (b *builder) emitPlane(p *planes.Plane, sceneCenter [3]float64) (*tileJSON, error) {
+	tris := planes.TrianglesIndexed(p.Normal, p.Polygon)
+	if len(tris) == 0 || len(p.Polygon) < 3 {
+		return nil, nil
+	}
+	var mn, mx [3]float64
+	mn = p.Polygon[0]
+	mx = p.Polygon[0]
+	for _, v := range p.Polygon {
+		for i := 0; i < 3; i++ {
+			if v[i] < mn[i] {
+				mn[i] = v[i]
+			}
+			if v[i] > mx[i] {
+				mx[i] = v[i]
+			}
+		}
+	}
+	var center [3]float64
+	for i := 0; i < 3; i++ {
+		center[i] = (mn[i] + mx[i]) / 2
+	}
+
+	positions := make([]float32, 0, len(p.Polygon)*3)
+	normals := make([]float32, 0, len(p.Polygon)*3)
+	for _, v := range p.Polygon {
+		positions = append(positions, float32(v[0]-center[0]), float32(v[1]-center[1]), float32(v[2]-center[2]))
+		normals = append(normals, float32(p.Normal[0]), float32(p.Normal[1]), float32(p.Normal[2]))
+	}
+	indices := make([]uint32, 0, len(tris)*3)
+	for _, t := range tris {
+		indices = append(indices, uint32(t[0]), uint32(t[1]), uint32(t[2]))
+	}
+
+	name := fmt.Sprintf("tiles/t%04d.glb", b.tileCount)
+	data, err := encodeMeshGLB(positions, normals, indices, p.Color[0], p.Color[1], p.Color[2])
+	if err != nil {
+		return nil, apperr.New(apperr.E5001, err, "平面瓦片编码失败："+name)
+	}
+	if err := os.WriteFile(filepath.Join(b.outDir, filepath.FromSlash(name)), data, 0o644); err != nil {
+		return nil, apperr.New(apperr.E5001, err, "平面瓦片写入失败："+name)
+	}
+	b.log.Debug("写出平面瓦片", "tile", name, "inliers", p.Inliers, "vertices", len(p.Polygon))
+	b.tileCount++
+	if b.onTile != nil && b.total > 0 {
+		b.onTile(b.tileCount, b.total)
+	}
+
+	tile := &tileJSON{
+		Transform:      geo.TranslateMatrix(center[0]-sceneCenter[0], center[1]-sceneCenter[1], center[2]-sceneCenter[2]),
+		GeometricError: 0,
+	}
+	var box [12]float64
+	for i := 0; i < 3; i++ {
+		box[3+i*3+i] = (mx[i] - mn[i]) / 2
+	}
+	tile.BoundingVolume.Box = &box
+	tile.Content = &contentJSON{URI: name}
+	return tile, nil
 }
 
 type builder struct {

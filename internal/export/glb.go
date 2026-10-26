@@ -8,10 +8,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
 
 	"github.com/LinuxSuRen/pointcloud-twin/internal/downsample"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
+	"github.com/LinuxSuRen/pointcloud-twin/internal/planes"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/proxy"
 )
 
@@ -201,6 +203,10 @@ func marshalJSON(v any) ([]byte, error) {
 type GLBOptions struct {
 	// Voxel 为可选降采样边长（米）；0 表示不降采样。大点云建议降采样控制单文件体积。
 	Voxel float64
+	// Planes 是可选的平面分割结果：作为实色面片网格导出。
+	Planes []planes.Plane
+	// PlaneDist 与 Planes 配套的距离阈值（米），用于把已被面片覆盖的点从点云中过滤。
+	PlaneDist float64
 }
 
 // BuildGLB 把点云与设备代理体组装为单文件 GLB（数字孪生模型）。
@@ -209,6 +215,9 @@ func BuildGLB(cloud *pcd.Cloud, devices []proxy.Device, opt GLBOptions) ([]byte,
 	points := cloud.Points
 	if opt.Voxel > 0 {
 		points = downsample.Voxel(points, opt.Voxel)
+	}
+	if len(opt.Planes) > 0 && opt.PlaneDist > 0 {
+		points = planes.FilterResidual(points, opt.Planes, opt.PlaneDist)
 	}
 
 	b := newBuilder()
@@ -283,6 +292,57 @@ func BuildGLB(cloud *pcd.Cloud, devices []proxy.Device, opt GLBOptions) ([]byte,
 		b.children = append(b.children, node)
 	}
 
+	// 平面面片：每个平面一个实色三角网节点（顶点为绝对局部 ENU 坐标）
+	for pi := range opt.Planes {
+		p := &opt.Planes[pi]
+		tris := planes.TrianglesIndexed(p.Normal, p.Polygon)
+		if len(tris) == 0 {
+			continue
+		}
+		pos := make([]float32, 0, len(p.Polygon)*3)
+		nrm := make([]float32, 0, len(p.Polygon)*3)
+		mn := [3]float32{math.MaxFloat32, math.MaxFloat32, math.MaxFloat32}
+		mx := [3]float32{-math.MaxFloat32, -math.MaxFloat32, -math.MaxFloat32}
+		for _, v := range p.Polygon {
+			pos = append(pos, float32(v[0]), float32(v[1]), float32(v[2]))
+			nrm = append(nrm, float32(p.Normal[0]), float32(p.Normal[1]), float32(p.Normal[2]))
+			for d := 0; d < 3; d++ {
+				if pos[len(pos)-3+d] < mn[d] {
+					mn[d] = pos[len(pos)-3+d]
+				}
+				if pos[len(pos)-3+d] > mx[d] {
+					mx[d] = pos[len(pos)-3+d]
+				}
+			}
+		}
+		idx := make([]uint32, 0, len(tris)*3)
+		for _, t := range tris {
+			idx = append(idx, uint32(t[0]), uint32(t[1]), uint32(t[2]))
+		}
+		posAcc := b.addAccessor(b.addView(f32bytes(pos)), 5126, "VEC3", len(p.Polygon), mn[:], mx[:])
+		nrmAcc := b.addAccessor(b.addView(f32bytes(nrm)), 5126, "VEC3", len(p.Polygon), nil, nil)
+		idxAcc := b.addAccessor(b.addView(u32bytes(idx)), 5125, "SCALAR", len(idx), nil, nil)
+		mat := gltfMaterial{Name: fmt.Sprintf("plane-%02d", pi+1), DoubleSided: true}
+		mat.PBR.BaseColorFactor = [4]float64{
+			float64(p.Color[0]) / 255, float64(p.Color[1]) / 255, float64(p.Color[2]) / 255, 1,
+		}
+		mat.PBR.MetallicFactor = 0
+		mat.PBR.RoughnessFactor = 0.9
+		b.doc.Materials = append(b.doc.Materials, mat)
+		matIdx := len(b.doc.Materials) - 1
+		mesh := b.addMesh([]gltfPrimitive{{
+			Mode:       4,
+			Attributes: map[string]int{"POSITION": posAcc, "NORMAL": nrmAcc},
+			Indices:    &idxAcc,
+			Material:   &matIdx,
+		}})
+		node := b.addNode(gltfNode{
+			Name: fmt.Sprintf("plane-%02d", pi+1),
+			Mesh: &mesh,
+		})
+		b.children = append(b.children, node)
+	}
+
 	root := b.addNode(gltfNode{Name: "root", Matrix: &zUpToYUp, Children: b.children})
 	b.doc.Scenes[0].Nodes = []int{root}
 	return b.build()
@@ -338,6 +398,14 @@ func u16bytes(vals []uint16) []byte {
 	out := make([]byte, 2*len(vals))
 	for i, v := range vals {
 		binary.LittleEndian.PutUint16(out[i*2:i*2+2], v)
+	}
+	return out
+}
+
+func u32bytes(vals []uint32) []byte {
+	out := make([]byte, 4*len(vals))
+	for i, v := range vals {
+		binary.LittleEndian.PutUint32(out[i*4:i*4+4], v)
 	}
 	return out
 }
