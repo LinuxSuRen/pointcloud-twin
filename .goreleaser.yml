@@ -1,0 +1,32 @@
+version: 2
+
+project_name: pointcloud-twin
+
+builds:
+  - id: pc2twin
+    main: ./cmd/pc2twin
+    binary: pc2twin
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: pc2twin
+    builds:
+      - pc2twin
+    name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: 'checksums.txt'
