@@ -6,15 +6,17 @@ import (
 	"github.com/LinuxSuRen/pointcloud-twin/internal/export"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/logx"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
+	"github.com/LinuxSuRen/pointcloud-twin/internal/planes"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/proxy"
 )
 
 func newExportCmd() *cobra.Command {
 	var (
-		input   string
-		devices string
-		output  string
-		voxel   float64
+		input     string
+		devices   string
+		output    string
+		voxel     float64
+		planeSpec string
 	)
 	cmd := &cobra.Command{
 		Use:   "export",
@@ -42,7 +44,19 @@ func newExportCmd() *cobra.Command {
 			if cfg != nil {
 				deviceList = cfg.Devices
 			}
-			data, err := export.BuildGLB(cloud, deviceList, export.GLBOptions{Voxel: voxel})
+			gopt := export.GLBOptions{Voxel: voxel}
+			if planeSpec != "" {
+				popt, err := planes.ParseOptions(planeSpec)
+				if err != nil {
+					return err
+				}
+				found, residual := planes.Detect(cloud.Points, popt)
+				gopt.Planes = found
+				gopt.PlaneDist = popt.Dist
+				cloud.Points = residual
+				log.Info("平面拟合分割完成", "stage", "planes", "planes", len(found))
+			}
+			data, err := export.BuildGLB(cloud, deviceList, gopt)
 			if err != nil {
 				log.Debug("GLB 生成失败", "err", err.Error())
 				return err
@@ -58,6 +72,7 @@ func newExportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&devices, "devices", "", "设备代理体配置（JSON，可选）")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "输出 GLB 文件路径（必填）")
 	cmd.Flags().Float64Var(&voxel, "voxel", 0, "导出时体素降采样边长（米）；0 表示不降采样")
+	cmd.Flags().StringVar(&planeSpec, "planes", "", "平面拟合分割（k=v 串，同 convert --planes）；平面导出为实色面片")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output")
 	return cmd

@@ -12,6 +12,7 @@ import (
 	"github.com/LinuxSuRen/pointcloud-twin/internal/export"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pcd"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/pipeline"
+	"github.com/LinuxSuRen/pointcloud-twin/internal/planes"
 	"github.com/LinuxSuRen/pointcloud-twin/internal/proxy"
 )
 
@@ -130,7 +131,16 @@ func (s *Server) handleExportGLB(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	glb, err := export.BuildGLB(cloud, devices, export.GLBOptions{})
+	// 平面分割结果（导入时启用平面拟合则存在）：面片网格 + 残余过滤
+	var planeList []planes.Plane
+	planeDist := 0.0
+	if dist, ps, err := planes.Load(filepath.Join(j.dir, "out", "planes.json")); err == nil {
+		planeList, planeDist = ps, dist
+	}
+	glb, err := export.BuildGLB(cloud, devices, export.GLBOptions{
+		Planes:    planeList,
+		PlaneDist: planeDist,
+	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "E9002", "GLB 生成失败")
 		return

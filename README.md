@@ -50,6 +50,7 @@ go build -o bin/pc2twin ./cmd/pc2twin
 | `--refine add` | LOD 模式：add / replace |
 | `--tiles-version 1.1` | 3D Tiles 版本：1.1（glb）/ 1.0（pnts） |
 | `--devices devices.json` | 设备代理体配置，校验后拷入输出目录 |
+| `--planes "dist=0.05,min=500"` | 平面拟合分割：大平面重建为面片（观感更实体、体积更小） |
 
 ### 3. 启动示例查看器
 
@@ -82,7 +83,7 @@ pc2twin serve --addr 127.0.0.1:8080 --data ./pc2twin-data
 pc2twin export --input site.pcd --devices devices.json --output twin.glb --voxel 0.05
 ```
 
-GLB 坐标为本地 ENU（米），根节点携带 z-up→y-up 变换；大点云建议 `--voxel` 降采样控制体积（serve 导出上限 800 万点）。
+GLB 坐标为本地 ENU（米），根节点携带 z-up→y-up 变换；大点云建议 `--voxel` 降采样控制体积（serve 导出上限 800 万点）。**启用平面拟合分割后（导入对话框勾选或 `--planes`），GLB 与瓦片中大平面为实色面片网格**——示例站点云 13013 点可检出 15 个平面、覆盖率 100%。
 
 ### 6. 图形化标注设备（查看器内编辑 devices.json）
 

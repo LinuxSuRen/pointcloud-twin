@@ -16,6 +16,7 @@ const voxel = ref('')
 const pointsPerTile = ref('50000')
 const refine = ref('add')
 const tilesVersion = ref('1.1')
+const planeFit = ref(false)
 
 const uploadPercent = ref(0)
 const jobView = ref(null)
@@ -95,6 +96,7 @@ const submit = async () => {
         pointsPerTile: pointsPerTile.value ? Number(pointsPerTile.value) : 50000,
         refine: refine.value,
         tilesVersion: tilesVersion.value,
+        planes: planeFit.value ? 'dist=0.03,min=500' : '',
       },
     })
     watchJob(jobView.value.id)
@@ -232,6 +234,12 @@ onUnmounted(() => {
             </select>
           </div>
         </div>
+        <div class="field">
+          <label class="field__label field__label--inline">
+            <input v-model="planeFit" type="checkbox" />
+            平面拟合分割（大平面重建为面片，观感更实体）
+          </label>
+        </div>
         <p v-if="errorText" class="dialog__error">{{ errorText }}</p>
         <div class="dialog__actions">
           <button class="btn btn--primary" type="button" :disabled="!pcdFile" @click="submit">
@@ -337,6 +345,18 @@ onUnmounted(() => {
   color: var(--color-danger);
   font-size: 12px;
   margin: 0 0 var(--space-2);
+}
+
+.field__label--inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+
+.field input[type='checkbox'] {
+  width: auto;
 }
 
 .dialog__actions {

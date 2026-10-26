@@ -118,6 +118,7 @@ type CreateJobRequest struct {
 		PointsPerTile int     `json:"pointsPerTile,omitempty"`
 		Refine        string  `json:"refine,omitempty"`
 		TilesVersion  string  `json:"tilesVersion,omitempty"`
+		Planes        string  `json:"planes,omitempty"`
 	} `json:"options"`
 }
 
@@ -234,6 +235,7 @@ func (m *JobManager) run(job *Job, req CreateJobRequest, pcdPath, devicesPath st
 		PointsPerTile: req.Options.PointsPerTile,
 		Refine:        req.Options.Refine,
 		TilesVersion:  req.Options.TilesVersion,
+		PlaneSpec:     req.Options.Planes,
 		DevicesFile:   devicesPath,
 		Log:           m.log,
 		ToolVersion:   m.toolVersion,

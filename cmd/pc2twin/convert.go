@@ -19,6 +19,7 @@ func newConvertCmd() *cobra.Command {
 		tilesVersion  string
 		devices       string
 		skipLAS       bool
+		planeSpec     string
 	)
 	cmd := &cobra.Command{
 		Use:   "convert",
@@ -46,6 +47,7 @@ func newConvertCmd() *cobra.Command {
 				TilesVersion:  tilesVersion,
 				DevicesFile:   devices,
 				SkipLAS:       skipLAS,
+				PlaneSpec:     planeSpec,
 				Log:           log,
 				ToolVersion:   version,
 			}
@@ -65,6 +67,7 @@ func newConvertCmd() *cobra.Command {
 	cmd.Flags().StringVar(&tilesVersion, "tiles-version", "1.1", "3D Tiles 版本：1.1（glb，默认）| 1.0（pnts）")
 	cmd.Flags().StringVar(&devices, "devices", "", "设备代理体配置文件（JSON），校验后拷贝到输出目录")
 	cmd.Flags().BoolVar(&skipLAS, "skip-las", false, "不写中间 LAS 文件")
+	cmd.Flags().StringVar(&planeSpec, "planes", "", "平面拟合分割（k=v 串：dist=0.03,min=500,grid=0.1,tol=0.2,trials=128,seed=1）；大平面重建为面片")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output")
 	return cmd

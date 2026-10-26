@@ -36,11 +36,34 @@ pc2twin convert --input site.pcd --output ./out \
 ```text
 out/
 ├── tileset.json          # 3D Tiles 入口
-├── tiles/                # 瓦片（.glb 或 .pnts）
+├── tiles/                # 瓦片（.glb 或 .pnts；启用平面分割时含面片网格瓦片）
 ├── site.pcd.las          # LAS 1.4 桥接文件（含 CRS，--skip-las 关闭）
+├── planes.json           # 平面分割结果（启用 --planes 时输出，供导出复用）
 ├── devices.json          # 代理体配置（提供 --devices 时输出，带 ENU 原点）
-└── report.json           # 转换报告（点数、包围盒、CRS、参数）
+└── report.json           # 转换报告（点数、包围盒、CRS、参数、平面覆盖率）
 ```
+
+## 平面拟合分割（--planes）
+
+站区类场景（地面、集装箱面、墙面）以平面为主，启用后大平面被重建为**面片网格瓦片**（按内点平均色着色、双面材质），残余点仍以点云瓦片呈现——观感更实体、数据量更小、平面可量测。
+
+```bash
+pc2twin convert -i site.pcd -o out --planes "dist=0.05,min=500"
+```
+
+参数（k=v 逗号串，均可省略）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `dist` | 0.03 | 内点距离阈值（米） |
+| `min` | 500 | 单平面最小内点数 |
+| `max` | 0（不限） | 最多抽取平面数 |
+| `grid` | 0.1 | 边界栅格分辨率（米，实际会按采样密度自适应放大） |
+| `tol` | 0.2 | 边界多边形简化容差（米） |
+| `trials` | 128 | 每平面 RANSAC 采样次数 |
+| `seed` | 1 | 随机种子（固定保证结果可复现） |
+
+实现要点：迭代 RANSAC（邻域采样提升命中共面三点）→ 占据栅格 + 连通域 + 裂缝跟踪提取边界多边形 → DP 简化 → 耳切三角化；法向符号归一（最大分量取正）；剔除小于最大连通片面积 10% 的碎屑。结果写入 `planes.json`（含 dist 与多边形顶点），导出 GLB/zip 时复用；覆盖率写入 `report.json` 的 `planes` 段。仅在 `--tiles-version 1.1` 下生成面片瓦片。
 
 ### `pc2twin pcd2las`
 
@@ -121,6 +144,7 @@ pc2twin export --input site.pcd --devices devices.json --output twin.glb --voxel
 | `--devices` | 设备代理体配置（JSON，可选；提供时设备以彩色盒体网格导出） |
 | `--output, -o` | 输出 GLB 文件路径（必填） |
 | `--voxel` | 导出时体素降采样边长（米）；0 表示不降采样 |
+| `--planes` | 平面拟合分割参数（同 convert），平面导出为实色面片网格 |
 | `--log-level` | 日志级别 |
 
 模型结构：根节点携带 z-up→y-up 矩阵（导入通用引擎后方向正确），子节点为 `pointcloud`（POINTS 图元，顶点色保留）与每台设备一个盒体节点（translation/rotation/scale 对应 center/heading/size，材质按 deviceType 着色）。

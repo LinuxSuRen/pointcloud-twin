@@ -152,6 +152,18 @@ pointcloud-twin/
 | 坐标系错误难察觉 | CRS 配错会导致瓦片位置漂移 | 输出转换报告（点数、包围盒、原点），查看器叠加校验 |
 | gocesiumtiler 外部路径 | 用户自带 gocesiumtiler 处理 LAS 时需自行处理其 CRS 参数 | 文档说明其 `--crs` 用法与本项目 LAS 的 ENU 语义 |
 
+### 2.8 平面拟合分割（`internal/planes`）
+
+站区场景以平面结构为主，启用后把大平面重建为**面片网格**，与残余点云叠加成混合底图：
+
+- **检测**：迭代 RANSAC 抽平面（**邻域采样**——第一点随机、第二三点取其空间近邻，大幅提升命中共面三点；计票在 ≤10 万点子集上粗评再全量精算）；法向符号归一（最大分量取正）；固定随机种子保证结果可复现
+- **边界**：内点投影到平面局部 2D → 占据栅格（分辨率按采样密度自适应，不低于约 2.2 倍中位近邻间距，防稀疏采样导致栅格互不相邻）→ 4 邻接连通域 → **裂缝跟踪**（沿「占据格在左、空格在右」的边缘行走）提取外边界 → Douglas-Peucker 简化；剔除面积小于最大连通片 10% 的碎屑（共享边缘点伪影）
+- **三角化**：耳切法（含数值退化兜底）；`TrianglesIndexed` 供 tiler 网格瓦片与 GLB 导出共用
+- **产出**：3D Tiles 1.1 下平面作为 TRIANGLES 瓦片（顶点色 + 双面材质），与点云树同挂场景根（残余点为空时纯平面瓦片集）；`planes.json`（dist + 多边形顶点）供导出复用；覆盖率写 `report.json`
+- **导出联动**：GLB 导出读 `planes.json` 输出平面网格节点，并用 `FilterResidual`（平面距离 + 射线法多边形包含测试）把已被面片覆盖的点从点云中过滤；CLI `export --planes` 现场检测
+- **前端**：导入对话框提供开关（默认 `dist=0.03,min=500`）
+- **实测**：示例站点云 13013 点 → 15 个平面、覆盖率 100%、残余 1057 点，转换 34ms；GLB 导出 31KB 含 15 个面片节点
+
 ## 6. 与需求的对齐
 
-本方案覆盖 [requirements.md](requirements.md) 的 R1–R5：R1 由 `internal/pcd` + `internal/tiler` 落地（3D Tiles 1.1 默认、1.0 可选、降采样可选）；R2 由 `internal/crs`/`internal/geo` + LAS 双 VLR + tileset 根变换 + 转换报告落地；R3 由 `internal/proxy` 与 `--devices` 流程落地；R4 由 cobra CLI + slog + `apperr` 错误码落地（文档见 [cli.md](cli.md)）；R5 由 `web/` 查看器与 mock 数据源落地。S1 部分落地（体素降采样）；S3 已落地首版（`pc2twin serve`：分片上传 + 异步任务 + SSE 进度 + 产物托管，见 2.5 节）；S2（图形化标注）、S4（批量多站点）不在首版范围。
+本方案覆盖 [requirements.md](requirements.md) 的 R1–R5：R1 由 `internal/pcd` + `internal/tiler` 落地（3D Tiles 1.1 默认、1.0 可选、降采样可选，平面拟合分割见 2.8 节）；R2 由 `internal/crs`/`internal/geo` + LAS 双 VLR + tileset 根变换 + 转换报告落地；R3 由 `internal/proxy` 与 `--devices` 流程落地；R4 由 cobra CLI + slog + `apperr` 错误码落地（文档见 [cli.md](cli.md)）；R5 由 `web/` 查看器与 mock 数据源落地。S1 已落地（体素降采样 + 平面分割）；S2 已落地（图形化标注，见 2.7 节）；S3 已落地首版（`pc2twin serve`：分片上传 + 异步任务 + SSE 进度 + 产物托管，见 2.5 节）；S4（批量多站点）不在首版范围。
